@@ -14,13 +14,17 @@ export interface Settings {
   tax_rate: number
   tax_inclusive: number
   auto_cleaning: number
+  upi_id: string
+  receipt_width: number
+  print_preview: number
+  printer_name: string | null
   receipt_footer: string | null
   cloud_sync_enabled: number
   cloud_endpoint: string | null
   licenseConfigured: boolean
   licenseActive: boolean
 }
-export type SettingsInput = Pick<Settings, 'restaurant_name' | 'tagline' | 'address' | 'phone' | 'gstin' | 'currency_symbol' | 'tax_rate' | 'tax_inclusive' | 'receipt_footer'> & { managerPin?: string; licenseKey?: string; auto_cleaning?: number }
+export type SettingsInput = Pick<Settings, 'restaurant_name' | 'tagline' | 'address' | 'phone' | 'gstin' | 'currency_symbol' | 'tax_rate' | 'tax_inclusive' | 'receipt_footer'> & { managerPin?: string; licenseKey?: string; auto_cleaning?: number; upi_id?: string; receipt_width?: number; print_preview?: number; printer_name?: string }
 export interface Zone { id: number; name: string; sort_order: number }
 export interface FloorTable {
   id: number; zone_id: number; label: string; type: 'table' | 'garden' | 'room'
@@ -34,35 +38,45 @@ export interface MenuItem {
 export interface Order {
   id: number; bill_number: string; table_id: number | null; order_type: OrderType
   status: 'open' | 'billed' | 'paid' | 'void'; subtotal: number; tax_amount: number
+  customer_phone: string | null; discount_percent: number; cash_tendered: number; change_returned: number
   discount_amount: number; revision: number; customer_name: string | null; guest_count: number | null
   grand_total: number; created_at: string; closed_at: string | null; payment_mode: string | null
 }
 export interface OrderItem {
   id: number; order_id: number; menu_item_id: number; item_name: string
+  net_minor: number; tax_minor: number; tax_inclusive_snapshot: number | null
   unit_price: number; quantity: number; notes: string | null; kot_printed: number; line_total: number
 }
 export interface Snapshot {
   settings: Settings; logo: string | null; zones: Zone[]; tables: FloorTable[]
   categories: Category[]; menu: MenuItem[]; orders: Order[]; orderItems: OrderItem[]
+  kitchen: KitchenTicket[]
   businessDate: string; lastClose: string | null; actor: Cashier; cloud: CloudStatus | null
 }
 export interface OrderInput {
-  type: OrderType; tableId: number | null; items: CartItem[]; guestName?: string; guestCount?: number
+  type: OrderType; tableId: number | null; items: CartItem[]; guestName?: string; guestCount?: number; phone?: string
 }
 export interface ServexApi {
   signIn(pin: string): Promise<Cashier | null>
   lock(): Promise<void>
   snapshot(): Promise<Snapshot>
   createOrder(order: OrderInput): Promise<number>
-  payOrder(id: number, mode: PaymentMode, revision?: number): Promise<void>
   addOrderItems(id: number, revision: number, items: CartItem[]): Promise<void>
+  clearUnsent(id: number, revision: number): Promise<void>
   editBill(input: BillEdit): Promise<void>
-  printBill(id: number, revision: number): Promise<void>
+  sendKot(id: number, revision: number): Promise<PrintResult>
+  printTicket(id: number): Promise<PrintResult>
+  readyTicket(id: number): Promise<void>
+  prebill(id: number, revision: number, split: BillSplit): Promise<PrintResult>
+  completePayment(input: CheckoutPayment): Promise<PrintResult>
+  pastBills(beforeId?: number): Promise<Order[]>
+  reprintReceipt(id: number): Promise<PrintResult>
+  voidReceipt(id: number, pin: string): Promise<void>
+  printPreview(jobId: string): Promise<void>
   saveLayout(updates: LayoutUpdate[]): Promise<void>
   transfer(input: TableTransfer): Promise<void>
   merge(input: TableMerge): Promise<void>
   updateStatus(input: TableStatusUpdate): Promise<void>
-  printKot(id: number): Promise<void>
   toggleItem(id: number): Promise<void>
   closeDay(overridePin?: string): Promise<void>
   updateSettings(input: SettingsInput): Promise<void>
@@ -104,8 +118,8 @@ export interface CloudInput { enabled: boolean; endpoint: string; token?: string
 export interface CloudStatus { tokenConfigured: boolean; passphraseConfigured: boolean; lastSynced: string | null }
 export interface PickedMedia { name: string; preview: string }
 
-export type PaymentMode = 'Cash' | 'Card' | 'UPI'
-export interface CartItem { id: number; quantity: number }
+export type PaymentMode = 'Cash' | 'Card' | 'UPI' | 'Room Folio'
+export interface CartItem { id: number; quantity: number; notes?: string }
 export interface LayoutRect { x_pos: number; y_pos: number; width: number; height: number }
 export type LayoutUpdate = LayoutRect & ({ id: number; zoneId: number } | {
   id?: undefined; zoneId: number; label: string; type: FloorTable['type']; capacity: number
@@ -115,5 +129,15 @@ export interface TableMerge { targetOrderId: number; sourceOrderId: number; sour
 export interface TableStatusUpdate { tableId: number; status: 'vacant' | 'cleaning' }
 export interface BillEdit {
   orderId: number; revision: number; guestName: string; guestCount: number | null
-  quantities: { id: number; quantity: number }[]
+  quantities: { id: number; quantity: number; notes?: string }[]
+  phone?: string; added?: CartItem[]; inclusive?: boolean; discount?: Discount; pin?: string
+}
+
+export type Discount = { kind: 'flat' | 'percent'; value: number }
+export type BillSplit = { kind: 'none' } | { kind: 'equal'; count: number } | { kind: 'items'; groups: number[][] }
+export interface CheckoutPayment { orderId: number; revision: number; mode: PaymentMode; tendered?: number; split: BillSplit }
+export interface PrintResult { html: string | null; jobId?: string; error?: string }
+export interface KitchenTicket {
+  id: number; order_id: number; status: 'preparing' | 'ready'; created_at: string
+  reference: string; lines: { name: string; quantity: number; notes: string | null }[]
 }

@@ -16,6 +16,7 @@ function ProfileSettings() {
   const { data, cashier } = usePosStore()
   const [busy, setBusy] = useState(false)
   const [showPin, setShowPin] = useState(false)
+  const [printPreview, setPrintPreview] = useState(Boolean(data?.settings.print_preview))
   const [autoCleaning, setAutoCleaning] = useState(Boolean(data?.settings.auto_cleaning))
   const [inclusive, setInclusive] = useState(Boolean(data?.settings.tax_inclusive))
   if (!data || !cashier) return null
@@ -37,6 +38,7 @@ function ProfileSettings() {
       restaurant_name: string('restaurant_name'), tagline: string('tagline') || null, phone: string('phone') || null,
       address: string('address') || null, gstin: string('gstin') || null, receipt_footer: string('receipt_footer') || null,
       currency_symbol: string('currency_symbol'), tax_rate: Number(form.get('tax_rate')), tax_inclusive: Number(inclusive), auto_cleaning: Number(autoCleaning),
+      upi_id: string('upi_id'), receipt_width: Number(form.get('receipt_width')), print_preview: Number(printPreview), printer_name: string('printer_name'),
       managerPin: string('managerPin') || undefined, licenseKey: string('licenseKey') || undefined,
     }), 'Settings saved.')
     if (saved) {
@@ -78,6 +80,17 @@ function ProfileSettings() {
         <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm font-medium">
           Auto-mark tables as Cleaning after payment
           <Switch checked={autoCleaning} onChange={setAutoCleaning} label="Auto-mark tables as Cleaning after payment" disabled={disabled} />
+        </div>
+        <div className="grid grid-cols-[1fr_120px] gap-3">
+          <Field label="UPI ID"><input className="field" name="upi_id" maxLength={185} required disabled={disabled} defaultValue={settings.upi_id} /></Field>
+          <Field label="Thermal width"><select className="field" name="receipt_width" disabled={disabled} defaultValue={settings.receipt_width}>
+            <option value={80}>80 mm</option><option value={58}>58 mm</option>
+          </select></Field>
+        </div>
+        <Field label="OS printer name (optional)"><input className="field" name="printer_name" maxLength={250} disabled={disabled}
+          defaultValue={settings.printer_name ?? ''} placeholder="System default printer" /></Field>
+        <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm font-medium">
+          Receipt Print Preview <Switch label="Receipt Print Preview" checked={printPreview} onChange={setPrintPreview} disabled={disabled} />
         </div>
         {admin && <div className="relative">
           <Field label="Manager Override PIN"><input className="field pr-10" name="managerPin" type={showPin ? 'text' : 'password'}

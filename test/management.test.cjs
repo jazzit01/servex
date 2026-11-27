@@ -38,7 +38,14 @@ test('legacy v1 backups migrate staff PINs without losing seeded data', async t 
   const SQL = await initSqlJs()
   const old = new SQL.Database(db.bytes())
   t.after(() => old.close())
-  old.run(`DROP INDEX orders_active_location;
+  old.run(`DROP TABLE kitchen_tickets;
+    DROP TABLE bill_sequences;
+    ALTER TABLE orders DROP COLUMN receipt_json;
+    ALTER TABLE settings DROP COLUMN printer_name;
+    ALTER TABLE settings DROP COLUMN print_preview;
+    ALTER TABLE settings DROP COLUMN receipt_width;
+    ALTER TABLE settings DROP COLUMN upi_id;
+    DROP INDEX orders_active_location;
     ALTER TABLE settings DROP COLUMN auto_cleaning;
     ALTER TABLE orders DROP COLUMN revision;
     ALTER TABLE orders DROP COLUMN guest_count;

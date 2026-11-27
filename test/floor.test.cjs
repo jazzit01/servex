@@ -66,13 +66,13 @@ test('checkout edits apply recorded tax, detect stale changes, and follow the cl
   db.write('UPDATE menu_items SET price = 100, tax_slab = 50 WHERE id = 1')
   service.editBill({ orderId: id, revision: 0, guestName: 'Guest', guestCount: 2, quantities: [{ id: line.id, quantity: 2 }] }, 1)
   assert.equal(service.activeOrder(id).grand_total, 0.21)
-  assert.throws(() => service.payOrder(id, 'Cash', 0), /changed/)
+  assert.throws(() => service.settle({ orderId: id, mode: 'Cash', revision: 0, tendered: 1, split: { kind: 'none' } }, 1, JSON.stringify), /changed/)
   service.markPrinted(id, 1, 1)
   service.addItems(id, 2, [{ id: 1, quantity: 1 }], 1)
   assert.equal(service.table(9).status, 'occupied')
   assert.equal(service.activeOrder(id).grand_total, 150.21)
   db.write('UPDATE settings SET auto_cleaning = 1')
-  service.payOrder(id, 'UPI', 3)
+  service.settle({ orderId: id, mode: 'UPI', revision: 3, split: { kind: 'none' } }, 1, order => JSON.stringify(order))
   assert.equal(service.table(9).status, 'cleaning')
   assert.throws(() => service.createOrder({ type: 'room', tableId: 9, items: [{ id: 1, quantity: 1 }] }, 1), /unavailable/)
   service.updateStatus({ tableId: 9, status: 'vacant' }, 1)
@@ -80,7 +80,7 @@ test('checkout edits apply recorded tax, detect stale changes, and follow the cl
   assert.equal(db.all("SELECT action FROM audit_logs ORDER BY id DESC LIMIT 1")[0].action, 'table-status-override')
   db.write('UPDATE settings SET auto_cleaning = 0')
   const next = service.createOrder({ type: 'room', tableId: 9, items: [{ id: 1, quantity: 1 }] }, 1)
-  service.payOrder(next, 'Cash', 0)
+  service.settle({ orderId: next, mode: 'Cash', revision: 0, tendered: 150, split: { kind: 'none' } }, 1, order => JSON.stringify(order))
   assert.equal(service.table(9).status, 'vacant')
 })
 
@@ -92,7 +92,14 @@ test('v2 migration preserves the recorded cents of existing active orders', asyn
   const SQL = await initSqlJs()
   const legacy = new SQL.Database(db.bytes())
   t.after(() => legacy.close())
-  legacy.run(`DROP INDEX orders_active_location;
+  legacy.run(`DROP TABLE kitchen_tickets;
+    DROP TABLE bill_sequences;
+    ALTER TABLE orders DROP COLUMN receipt_json;
+    ALTER TABLE settings DROP COLUMN printer_name;
+    ALTER TABLE settings DROP COLUMN print_preview;
+    ALTER TABLE settings DROP COLUMN receipt_width;
+    ALTER TABLE settings DROP COLUMN upi_id;
+    DROP INDEX orders_active_location;
     ALTER TABLE settings DROP COLUMN auto_cleaning;
     ALTER TABLE orders DROP COLUMN revision;
     ALTER TABLE orders DROP COLUMN guest_count;
@@ -105,4 +112,61 @@ test('v2 migration preserves the recorded cents of existing active orders', asyn
   assert.equal(service.activeOrder(id).grand_total, order.grand_total)
   assert.equal(service.lines(id).reduce((sum, line) => sum + line.net_minor, 0), Math.round(order.subtotal * 100))
   assert.equal(service.lines(id).reduce((sum, line) => sum + line.tax_minor, 0), Math.round(order.tax_amount * 100))
+})
+
+test('delta tickets retain the exact sent items and manager authorization rolls back an attempted void', async t => {
+  const { db, service } = await setup(t)
+  const id = service.createOrder({ type: 'dinein', tableId: 1, items: [{ id: 1, quantity: 2, notes: 'No onion' }] }, 1)
+  const first = service.sendKot(id, 0, 1)
+  assert.equal(service.ticket(first).lines[0].notes, 'No onion')
+  assert.throws(() => service.sendKot(id, 1, 1), /no unsent/)
+  service.addItems(id, 1, [{ id: 2, quantity: 1 }], 1)
+  const second = service.sendKot(id, 2, 1)
+  assert.deepEqual(service.ticket(second).lines.map(row => row.name), ['Chicken Tikka'])
+  const [line] = service.lines(id)
+  const edit = { orderId: id, revision: 3, guestName: '', guestCount: null, quantities: [{ id: line.id, quantity: 1 }] }
+  assert.throws(() => service.editBill(edit, 1), /Manager PIN required/)
+  assert.equal(service.lines(id)[0].quantity, 2)
+  service.editBill({ ...edit, pin: '8642' }, 1, pin => assert.equal(pin, '8642'))
+  assert.equal(service.ticket(first).lines[0].quantity, 2)
+  assert.equal(service.lines(id)[0].quantity, 1)
+  assert.equal(db.all("SELECT count(*) AS n FROM audit_logs WHERE action = 'VOID_KOT_ITEM'")[0].n, 1)
+  service.readyTicket(second)
+  assert.equal(service.ticket(second).status, 'ready')
+})
+
+test('checkout enforces discount authorization and preserves split totals and daily receipt numbering', async t => {
+  const { db, service } = await setup(t)
+  const id = service.createOrder({ type: 'parcel', tableId: null, items: [{ id: 1, quantity: 1 }, { id: 2, quantity: 1 }] }, 1)
+  const edit = { orderId: id, revision: 0, guestName: '', guestCount: null, quantities: [], discount: { kind: 'percent', value: 20 } }
+  assert.throws(() => service.editBill(edit, 1), /Manager PIN required/)
+  assert.equal(service.activeOrder(id).discount_amount, 0)
+  service.editBill({ ...edit, pin: '8642' }, 1, pin => assert.equal(pin, '8642'))
+  const order = service.activeOrder(id)
+  const itemGroups = service.lines(id).map(row => [row.id])
+  for (const split of [{ kind: 'items', groups: itemGroups }, { kind: 'equal', count: 7 }]) {
+    const parts = service.receiptParts(order, split)
+    assert.equal(parts.reduce((sum, part) => sum + part.total, 0), Math.round(order.grand_total * 100))
+    assert.ok(parts.every(part => part.total === part.net + part.tax - part.discount))
+  }
+  const pay = { orderId: id, mode: 'Cash', revision: 1, tendered: 0, split: { kind: 'items', groups: itemGroups } }
+  assert.throws(() => service.settle(pay, 1, JSON.stringify), /Cash tendered/)
+  service.settle({ ...pay, tendered: 1000 }, 1, (snapshot, parts) => JSON.stringify({ snapshot, parts }))
+  const paid = service.paidBill(id)
+  assert.match(paid.bill_number, /^SVX-\d{8}-0001$/)
+  assert.equal(Math.round(paid.change_returned * 100), 100000 - Math.round(order.grand_total * 100))
+  assert.equal(JSON.parse(paid.receipt_json).parts.length, 2)
+  const newId = service.createOrder({ type: 'parcel', tableId: null, items: [{ id: 1, quantity: 1 }] }, 1)
+  service.settle({ orderId: newId, mode: 'UPI', revision: 0, split: { kind: 'none' } }, 1, order => JSON.stringify(order))
+  assert.match(service.paidBill(newId).bill_number, /-0002$/)
+  service.voidReceipt(id, 1)
+  assert.deepEqual(service.pastBills().map(row => row.id), [newId])
+  assert.equal(db.all("SELECT count(*) AS n FROM audit_logs WHERE action = 'MANAGER_DISCOUNT'")[0].n, 1)
+})
+
+test('UPI links carry an exact INR amount and escape merchant details', () => {
+  const { upiUri } = require('../dist-electron/src/types/settlement')
+  const url = new URL(upiUri('shop@upi', 'Spice & Tea', 42.1))
+  assert.equal(url.href, 'upi://pay?pa=shop%40upi&pn=Spice%20%26%20Tea&am=42.10&cu=INR')
+  assert.equal(url.searchParams.get('pn'), 'Spice & Tea')
 })

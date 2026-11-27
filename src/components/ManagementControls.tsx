@@ -18,7 +18,7 @@ export function Field({ label, children }: { label: string; children: ReactNode 
   </label>
 }
 
-export function Modal({ title, onClose, children, compact }: { title: string; onClose: () => void; children: ReactNode; compact?: boolean }) {
+export function Modal({ title, onClose, children, compact, wide }: { title: string; onClose: () => void; children: ReactNode; compact?: boolean; wide?: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const toast = usePosStore(state => state.toast)
   useEffect(() => {
@@ -27,7 +27,7 @@ export function Modal({ title, onClose, children, compact }: { title: string; on
     return () => { if (element.open) element.close() }
   }, [])
   return <dialog ref={dialog} aria-label={title} onCancel={event => { event.preventDefault(); onClose() }}
-    className={`panel max-h-[90vh] max-w-[90vw] overflow-auto p-0 backdrop:bg-slate-950/40 ${compact ? 'w-[420px]' : 'w-[480px]'}`}>
+    className={`panel max-h-[90vh] max-w-[90vw] overflow-auto p-0 backdrop:bg-slate-950/40 ${wide ? 'w-[768px] max-w-3xl' : compact ? 'w-[420px]' : 'w-[480px]'}`}>
     <div className="flex items-center justify-between border-b px-5 py-4">
       <h2>{title}</h2><button className="secondary p-1.5" type="button" aria-label="Close dialog" onClick={onClose}><X size={16} /></button>
     </div>
@@ -35,15 +35,25 @@ export function Modal({ title, onClose, children, compact }: { title: string; on
   </dialog>
 }
 
-export function MediaThumbnail({ name, preview, alt }: { name: string | null; preview?: string; alt: string }) {
+export function MediaThumbnail({ name, preview, alt, banner }: { name: string | null; preview?: string; alt: string; banner?: boolean }) {
+  const placeholder = useRef<HTMLSpanElement>(null)
+  const [inView, setInView] = useState(!banner)
   const [resolved, setResolved] = useState<{ name: string; url: string | null }>()
   useEffect(() => {
-    if (!name || preview) return
+    if (!banner || inView || !placeholder.current) return
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) setInView(true)
+    }, { rootMargin: '120px' })
+    observer.observe(placeholder.current)
+    return () => observer.disconnect()
+  }, [banner, inView])
+  useEffect(() => {
+    if (!name || preview || !inView) return
     let current = true
     void window.servexApi.readMedia(name).then(url => { if (current) setResolved({ name, url }) }).catch(() => {})
     return () => { current = false }
-  }, [name, preview])
+  }, [name, preview, inView])
   const source = preview ?? (resolved?.name === name ? resolved?.url : null)
-  return source ? <img src={source} alt={alt} className="size-10 rounded-lg border bg-white object-cover" />
-    : <span className="grid size-10 place-items-center rounded-lg border bg-slate-50 text-slate-400"><Image size={17} aria-hidden /></span>
+  return source ? <img src={source} alt={alt} className={banner ? "h-24 w-full object-cover" : "size-10 rounded-lg border bg-white object-cover"} />
+    : <span ref={placeholder} className={banner ? "grid h-24 w-full place-items-center bg-slate-100 text-slate-400" : "grid size-10 place-items-center rounded-lg border bg-slate-50 text-slate-400"}><Image size={17} aria-hidden /></span>
 }

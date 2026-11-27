@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Cashier, Order, OrderType, Route, Snapshot } from '../types/pos'
+import type { Cashier, Order, OrderType, PrintResult, Route, Snapshot } from '../types/pos'
 
 interface PosState {
   route: Route
@@ -9,6 +9,8 @@ interface PosState {
   tableId: number | null
   billingSession: number
   orderId: number | null
+  print: PrintResult | null
+  setPrint(print: PrintResult | null): void
   openCheckout: boolean
   floorLayoutDirty: boolean
   toast: { message: string; error: boolean } | null
@@ -23,7 +25,7 @@ interface PosState {
 }
 let toastTimer: ReturnType<typeof setTimeout>
 export const usePosStore = create<PosState>((set, get) => ({
-  route: 'floor', cashier: null, data: null, orderType: 'parcel', tableId: null, orderId: null, openCheckout: false, floorLayoutDirty: false, billingSession: 0, toast: null,
+  route: 'floor', print: null, setPrint: print => set({ print }), cashier: null, data: null, orderType: 'parcel', tableId: null, orderId: null, openCheckout: false, floorLayoutDirty: false, billingSession: 0, toast: null,
   setFloorLayoutDirty: floorLayoutDirty => set({ floorLayoutDirty }),
   navigate: route => {
     if (route !== 'floor' && get().floorLayoutDirty && !window.confirm('Leave and discard unsaved layout changes?')) return
@@ -54,7 +56,7 @@ export const usePosStore = create<PosState>((set, get) => ({
     return true
   },
   lock: async () => {
-    set({ cashier: null, data: null, route: 'floor', toast: null })
+    set({ cashier: null, data: null, route: 'floor', toast: null, print: null })
     await window.servexApi.lock()
   },
 }))

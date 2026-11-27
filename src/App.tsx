@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ArrowRight, LockKeyhole } from 'lucide-react'
 import AppShell from './components/layout/AppShell'
 import FloorMapPage from './pages/FloorMapPage'
+import PrintPreview from './components/billing/PrintPreview'
 import BillingPage from './pages/BillingPage'
 import OrdersKotPage from './pages/OrdersKotPage'
 import MenuAdminPage from './pages/MenuAdminPage'
@@ -47,15 +48,16 @@ export default function App() {
       if (!['F1', 'F2', 'F3'].includes(event.key) || document.querySelector('dialog[open]')) return
       event.preventDefault()
       if (event.key === 'F1') startOrder('parcel')
-      if (event.key === 'F2') navigate('floor')
+      if (event.key === 'F2' && route !== 'billing') navigate('floor')
       if (event.key === 'F3') navigate('orders')
     }
     window.addEventListener('keydown', shortcuts)
     return () => window.removeEventListener('keydown', shortcuts)
-  }, [cashier, navigate, startOrder])
+  }, [cashier, navigate, startOrder, route])
   const Page = pages[route]
   return <>
     {cashier ? <AppShell><Page key={route === 'billing' ? billingSession : route} /></AppShell> : <SignIn />}
+    {cashier && <PrintPreview />}
     {toast && <div role={toast.error ? 'alert' : 'status'} className={`fixed bottom-6 right-6 rounded-lg px-4 py-3 text-sm font-medium text-white shadow-lg ${toast.error ? 'bg-red-700' : 'bg-teal-800'}`}>{toast.message}</div>}
   </>
 }

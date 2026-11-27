@@ -63,6 +63,19 @@ ALTER TABLE order_items ADD COLUMN tax_minor INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE order_items ADD COLUMN tax_rate_snapshot REAL;
 ALTER TABLE order_items ADD COLUMN tax_inclusive_snapshot INTEGER;`
 
+const v4Schema = `
+ALTER TABLE settings ADD COLUMN upi_id TEXT NOT NULL DEFAULT 'servex@upi';
+ALTER TABLE settings ADD COLUMN receipt_width INTEGER NOT NULL DEFAULT 80;
+ALTER TABLE settings ADD COLUMN print_preview INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE settings ADD COLUMN printer_name TEXT;
+ALTER TABLE orders ADD COLUMN receipt_json TEXT;
+CREATE TABLE bill_sequences (day TEXT PRIMARY KEY, last_number INTEGER NOT NULL);
+CREATE TABLE kitchen_tickets (
+  id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id),
+  status TEXT NOT NULL DEFAULT 'preparing', reference TEXT NOT NULL, lines TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);`
+
 export function atomicWrite(file: string, bytes: Uint8Array) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const temp = path.join(path.dirname(file), `.${randomUUID()}.tmp`)
@@ -81,7 +94,7 @@ export function hashPin(pin: string, salt: string) {
 function migrate(db: Database) {
   db.run('PRAGMA foreign_keys = ON')
   const version = Number(db.exec('PRAGMA user_version')[0].values[0][0])
-  if (version > 3) throw new Error('This database requires a newer ServeX version.')
+  if (version > 4) throw new Error('This database requires a newer ServeX version.')
   db.run('BEGIN')
   if (version < 1) db.run(schema + 'PRAGMA user_version = 1;')
   if (!db.exec('SELECT id FROM settings').length) {
@@ -147,6 +160,14 @@ function migrate(db: Database) {
       PRAGMA user_version = 3;
     `)
   }
+  if (version < 4) db.run(v4Schema + `
+    INSERT INTO kitchen_tickets (order_id, reference, lines, created_at)
+    SELECT o.id, COALESCE(t.label, o.bill_number, 'Takeaway'),
+      json_group_array(json_object('name', i.item_name, 'quantity', i.quantity, 'notes', i.notes)), o.created_at
+    FROM orders o JOIN order_items i ON i.order_id = o.id LEFT JOIN tables t ON t.id = o.table_id
+    WHERE o.status IN ('open','billed') AND i.kot_printed = 1 GROUP BY o.id;
+    PRAGMA user_version = 4;
+  `)
   db.run('COMMIT')
 }
 
@@ -221,6 +242,7 @@ export class PosDatabase {
         reference.run(schema)
         if (version >= 2) reference.run(v2Columns)
         if (version >= 3) reference.run(v3Columns)
+        if (version >= 4) reference.run(v4Schema)
         const tables = reference.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")[0].values.flat()
         if (candidate.exec("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'view')").length ||
             tables.some(table => ['table_info', 'foreign_key_list'].some(pragma =>

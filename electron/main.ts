@@ -8,7 +8,8 @@ import { BackupEngine, backupFilename, validatePassphrase } from './backup'
 import { Catalog, nameOf, pinDigest, validPin } from './catalog'
 import { CloudBackup, DeviceSecrets } from './cloud'
 import { MediaLibrary } from './media'
-import { FloorService } from './service'
+import { FloorService, orderColumns } from './service'
+import { Printer, receiptHtml, ticketHtml, type ReceiptDocument } from './printer'
 import type { Cashier, Category, FloorTable, MenuItem, Order, OrderItem, Settings, SettingsInput, Snapshot, Zone, ServexApi } from '../src/types/pos'
 
 const dev = !app.isPackaged && process.env.SERVEX_DEV === '1'
@@ -54,6 +55,7 @@ function createWindow() {
 function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cloud: CloudBackup, secrets: DeviceSecrets) {
   const catalog = new Catalog(db, media)
   const service = new FloorService(db)
+  const printer = new Printer()
   const printing = new Set<number>()
   function ensureIdle(...ids: number[]) {
     if (ids.some(id => printing.has(id))) throw new Error('Wait for the order’s print dialog to finish.')
@@ -75,7 +77,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
   const settings = (): Settings => {
     const { license_key, ...config } = db.all<Omit<Settings, 'licenseConfigured' | 'licenseActive'> & { license_key: string | null }>(
       `SELECT restaurant_name, tagline, logo_path, address, phone, gstin, currency_symbol, tax_rate,
-        tax_inclusive, auto_cleaning, receipt_footer, cloud_sync_enabled, cloud_endpoint, license_key FROM settings`,
+        tax_inclusive, auto_cleaning, receipt_width, print_preview, printer_name, upi_id, receipt_footer, cloud_sync_enabled, cloud_endpoint, license_key FROM settings`,
     )[0]
     return { ...config, licenseConfigured: Boolean(license_key), licenseActive: activeLicense(license_key) }
   }
@@ -89,7 +91,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     cashier = db.all<Cashier>('SELECT id, name, role FROM users WHERE pin = ? AND is_active = 1 ORDER BY id LIMIT 1', [pinDigest(db, pin)])[0] ?? null
     return cashier
   })
-  register('lock', 'public', () => { cashier = null })
+  register('lock', 'public', () => { cashier = null; printer.clear() })
   register('snapshot', 'staff', (): Snapshot => {
     const config = settings()
     return {
@@ -98,8 +100,9 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
       tables: db.all<FloorTable>('SELECT * FROM tables ORDER BY id'),
       categories: db.all<Category>('SELECT * FROM categories ORDER BY sort_order, id'),
       menu: db.all<MenuItem>('SELECT * FROM menu_items WHERE archived = 0 ORDER BY id'),
-      orders: db.all<Order>("SELECT * FROM orders WHERE status IN ('open','billed') OR date(closed_at,'localtime') = ? ORDER BY id DESC", [localDay()]),
+      orders: db.all<Order>(`SELECT ${orderColumns} FROM orders WHERE status IN ('open','billed') OR date(closed_at,'localtime') = ? ORDER BY id DESC`, [localDay()]),
       orderItems: db.all<OrderItem>("SELECT i.* FROM order_items i JOIN orders o ON o.id = i.order_id WHERE o.status IN ('open','billed') ORDER BY i.id"),
+      kitchen: service.kitchen(),
       businessDate: localDay(),
       lastClose: db.all<{ created_at: string }>("SELECT created_at FROM audit_logs WHERE action = 'z-close' AND details = ? ORDER BY id DESC LIMIT 1", [localDay()])[0]?.created_at ?? null,
     }
@@ -119,74 +122,84 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     ensureIdle(id)
     service.addItems(id, revision, items, cashier!.id)
   })
+  register('clearUnsent', 'staff', (id, revision) => { ensureIdle(id); service.clearUnsent(id, revision, cashier!.id) })
   register('editBill', 'staff', input => {
     ensureIdle(input.orderId)
-    service.editBill(input, cashier!.id)
+    service.editBill(input, cashier!.id, requireManagerPin)
   })
-  register('payOrder', 'staff', (id, mode, revision) => {
-    ensureIdle(id)
-    service.payOrder(id, mode, revision)
-  })
-
-  async function printText(id: number, title: string, body: string[]) {
-    ensureIdle(id)
-    printing.add(id)
-    let ticket: BrowserWindow | undefined
-    try {
-      ticket = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
-      const escaped = body.join('\n').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      await ticket.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
-        `<!doctype html><meta charset="utf-8"><title>${title}</title><style>body{font:14px system-ui;margin:1em}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><h2>${title}</h2><pre>${escaped}</pre>`,
-      ))
-      const contents = ticket.webContents
-      await new Promise<void>((resolve, reject) => {
-        contents.print({ silent: false }, (ok, reason) => ok ? resolve() : reject(new Error(reason || 'Printing cancelled.')))
-      })
-    } finally {
-      printing.delete(id)
-      if (ticket && !ticket.isDestroyed()) ticket.destroy()
+  function requireManagerPin(pin?: string) {
+    if (pin === undefined || pin === '') throw new Error('Manager PIN required for this change.')
+    if (Date.now() < nextOverride) throw new Error('Wait a moment before trying another manager PIN.')
+    const digest = pinDigest(db, validPin(pin))
+    const configured = db.all<{ manager_pin: string }>('SELECT manager_pin FROM settings WHERE id = 1')[0].manager_pin
+    if (configured === pinDigest(db, '1234')) throw new Error('An administrator must replace the demo override PIN first.')
+    if (configured !== digest) {
+      nextOverride = Date.now() + 2000
+      throw new Error('Incorrect manager override PIN.')
     }
   }
 
-  register('printKot', 'staff', async id => {
-    const order = service.activeOrder(id)
-    const rows = service.lines(id).filter(row => !row.kot_printed)
-    if (!rows.length) throw new Error('All items have already been sent to the printer.')
-    const location = order.table_id === null ? null : service.table(order.table_id)
-    await printText(id, 'Kitchen order ticket', [order.bill_number, location?.label ?? order.order_type.toUpperCase(),
-      ...rows.map(row => `${row.quantity} × ${row.item_name}`)])
-    db.transaction(sql => {
-      for (const row of rows) sql.run('UPDATE order_items SET kot_printed = 1 WHERE id = ? AND order_id = ?', [row.id, id])
-    })
+  const document = (order: Order, parts: ReceiptDocument['parts'], brand: Settings): ReceiptDocument => ({
+    order, parts,
+    brand: { restaurant_name: brand.restaurant_name, address: brand.address, phone: brand.phone, gstin: brand.gstin,
+      currency_symbol: brand.currency_symbol, receipt_footer: brand.receipt_footer, upi_id: brand.upi_id },
+    logoName: brand.logo_path,
+    location: (order.table_id !== null && service.table(order.table_id)?.label) || 'Takeaway',
+    timestamp: order.closed_at ? order.closed_at.replace(' ', 'T') + 'Z' : new Date().toISOString(),
   })
 
-  register('printBill', 'staff', async (id, revision) => {
+  register('sendKot', 'staff', (id, revision) => {
+    ensureIdle(id)
+    const actor = cashier!.id
+    const config = settings()
+    const ticket = service.ticket(service.sendKot(id, revision, actor))
+    return printer.submit(ticketHtml(ticket, config.receipt_width), config, actor)
+  })
+  register('printTicket', 'staff', id => {
+    const config = settings()
+    return printer.submit(ticketHtml(service.ticket(id), config.receipt_width), config, cashier!.id)
+  })
+  register('readyTicket', 'staff', id => service.readyTicket(id))
+  register('prebill', 'staff', async (id, revision, split) => {
+    ensureIdle(id)
     const order = service.activeOrder(id, revision)
     const actor = cashier!.id
     const config = settings()
-    const location = order.table_id === null ? null : service.table(order.table_id)
-    const money = (value: number) => config.currency_symbol + value.toFixed(2)
-    const details = [config.restaurant_name, config.address, config.phone, config.gstin && `Tax ID: ${config.gstin}`,
-      '', `${order.bill_number} · ${location?.label ?? 'Takeaway'}`, new Date().toLocaleString(),
-      order.customer_name && `Guest: ${order.customer_name}`, '',
-      ...service.lines(id).map(row => `${row.quantity} × ${row.item_name}  ${money(row.line_total)}`), '',
-      `Subtotal: ${money(order.subtotal)}`, `Tax: ${money(order.tax_amount)}`,
-      order.discount_amount > 0 ? `Discount: ${money(order.discount_amount)}` : null,
-      `Total: ${money(order.grand_total)}`, '', config.receipt_footer]
-    await printText(id, 'Guest bill', details.filter((line): line is string => line !== null))
-    service.markPrinted(id, revision, actor)
+    const doc = document(order, service.receiptParts(order, split), config)
+    printing.add(id)
+    try {
+      const html = await receiptHtml(doc, config.receipt_width, true, media.preview(doc.logoName))
+      const result = await printer.submit(html, config, actor)
+      if (!result.error || result.html) service.markPrinted(id, revision, actor)
+      return result
+    } finally { printing.delete(id) }
   })
+  register('completePayment', 'staff', async input => {
+    ensureIdle(input.orderId)
+    const actor = cashier!.id
+    const config = settings()
+    const stored = service.settle(input, actor, (order, parts) => JSON.stringify(document(order, parts, config)))
+    const doc = JSON.parse(stored) as ReceiptDocument
+    try { return await printer.submit(await receiptHtml(doc, config.receipt_width, false, media.preview(doc.logoName)), config, actor) }
+    catch { return { html: null, error: 'Payment saved. Receipt rendering failed. Use Past Bills to reprint.' } }
+  })
+  register('pastBills', 'staff', before => service.pastBills(before))
+  register('reprintReceipt', 'staff', async id => {
+    const order = service.paidBill(id)
+    const config = settings()
+    const actor = cashier!.id
+    const doc = order.receipt_json ? JSON.parse(order.receipt_json) as ReceiptDocument : document(order, service.receiptParts(order, { kind: 'none' }), config)
+    return printer.submit(await receiptHtml(doc, config.receipt_width, false, media.preview(doc.logoName)), config, actor)
+  })
+  register('voidReceipt', 'staff', (id, pin) => {
+    requireManagerPin(pin)
+    service.voidReceipt(id, cashier!.id)
+  })
+  register('printPreview', 'staff', id => printer.preview(id, cashier!.id))
 
   register('toggleItem', 'manager', (id: number) => db.write('UPDATE menu_items SET is_available = 1 - is_available WHERE id = ? AND archived = 0', [id]))
   register('closeDay', 'staff', (overridePin?: string) => {
-    if (cashier?.role === 'cashier') {
-      if (Date.now() < nextOverride) throw new Error('Wait a moment before trying another manager PIN.')
-      nextOverride = Date.now() + 2000
-      const digest = pinDigest(db, validPin(overridePin ?? ''))
-      const configured = db.all<{ manager_pin: string }>('SELECT manager_pin FROM settings WHERE id = 1')[0].manager_pin
-      if (configured === pinDigest(db, '1234')) throw new Error('An administrator must replace the demo override PIN first.')
-      if (configured !== digest) throw new Error('Incorrect manager override PIN.')
-    }
+    if (cashier?.role === 'cashier') requireManagerPin(overridePin)
     const date = localDay()
     if (db.all("SELECT id FROM orders WHERE status IN ('open','billed') LIMIT 1").length) throw new Error('Settle open orders before closing the day.')
     if (db.all("SELECT id FROM audit_logs WHERE action = 'z-close' AND details = ?", [date]).length) throw new Error('Today has already been closed.')
@@ -212,12 +225,17 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     }
     const digest = input.managerPin === undefined ? null : pinDigest(db, validPin(input.managerPin))
     if (input.licenseKey !== undefined && (typeof input.licenseKey !== 'string' || input.licenseKey.length > 2048)) throw new Error('Enter a valid license key.')
+    if (input.upi_id !== undefined && (typeof input.upi_id !== 'string' || !/^[\w.+-]{1,120}@[\w.-]{1,64}$/.test(input.upi_id))) throw new Error('Enter a valid UPI ID.')
+    if (input.receipt_width !== undefined && ![58, 80].includes(input.receipt_width)) throw new Error('Choose a 58 mm or 80 mm roll.')
+    if (input.print_preview !== undefined && ![0, 1].includes(input.print_preview)) throw new Error('Choose a valid print mode.')
     db.transaction(sql => {
       sql.run(`UPDATE settings SET restaurant_name = ?, tagline = ?, address = ?, phone = ?, gstin = ?,
         currency_symbol = ?, tax_rate = ?, tax_inclusive = ?, receipt_footer = ?,
-        auto_cleaning = COALESCE(?, auto_cleaning), manager_pin = COALESCE(?, manager_pin), license_key = COALESCE(?, license_key) WHERE id = 1`,
+        auto_cleaning = COALESCE(?, auto_cleaning), manager_pin = COALESCE(?, manager_pin), license_key = COALESCE(?, license_key),
+        upi_id = COALESCE(?, upi_id), receipt_width = COALESCE(?, receipt_width), print_preview = COALESCE(?, print_preview), printer_name = COALESCE(?, printer_name) WHERE id = 1`,
       [name, clean(input.tagline), clean(input.address), clean(input.phone), clean(input.gstin), currency, input.tax_rate,
-        input.tax_inclusive, clean(input.receipt_footer), input.auto_cleaning ?? null, digest, input.licenseKey?.trim() ?? null])
+        input.tax_inclusive, clean(input.receipt_footer), input.auto_cleaning ?? null, digest, input.licenseKey?.trim() ?? null, input.upi_id ?? null, input.receipt_width ?? null, input.print_preview ?? null,
+        input.printer_name === undefined ? null : clean(input.printer_name)])
       sql.run("INSERT INTO audit_logs (user_id, action, entity_type, details) VALUES (?, 'settings-updated', 'settings', ?)",
         [cashier!.id, JSON.stringify({ managerPinChanged: digest !== null, licenseChanged: input.licenseKey !== undefined })])
     })
@@ -294,6 +312,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     const previous = db.all<{ pin: string }>('SELECT pin FROM users WHERE id = ?', [actor.id])[0].pin
     backup.restore(result.filePaths[0], passphrase, localKey, localKey ?? passphrase)
     cloud.invalidate()
+    printer.clear()
     const restored = db.all<Cashier>(
       "SELECT id, name, role FROM users WHERE id = ? AND role = 'admin' AND is_active = 1 AND pin = ?", [actor.id, previous],
     )[0]

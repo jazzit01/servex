@@ -15,7 +15,7 @@ export default function ReportsPage() {
   ]
   return <div className="workspace"><div><h1>Reports & Z-Close</h1><p className="subtitle">Paid orders for {data.businessDate}.</p></div>
     <div className="grid grid-cols-3 gap-4">{stats.map(({ label, value }) => <div className="panel p-5" key={label}><div className="caption">{label}</div><div className="mt-2 text-2xl font-bold">{value}</div></div>)}</div>
-    <section className="panel p-5"><h2>Payment breakdown</h2><ul className="mt-3 divide-y">{['Cash', 'Card', 'UPI'].map(mode => <li className="flex justify-between py-3 text-sm" key={mode}><span>{mode}</span><strong>{money(paid.filter(order => order.payment_mode === mode).reduce((total, order) => total + order.grand_total, 0))}</strong></li>)}</ul></section>
+    <section className="panel p-5"><h2>Payment breakdown</h2><ul className="mt-3 divide-y">{['Cash', 'Card', 'UPI', 'Room Folio'].map(mode => <li className="flex justify-between py-3 text-sm" key={mode}><span>{mode}</span><strong>{money(paid.filter(order => order.payment_mode === mode).reduce((total, order) => total + order.grand_total, 0))}</strong></li>)}</ul></section>
     <section className="panel flex items-center justify-between p-5"><div><h2>Close business day</h2><p className="subtitle">{data.lastClose ? 'Today’s close has been recorded.' : 'Settle open orders before recording the daily close.'}</p></div>
       <div className="flex items-center gap-2">
       {cashier?.role === 'cashier' && !data.lastClose && <input className="field w-44" aria-label="Manager override PIN"
