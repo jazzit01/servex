@@ -8,8 +8,8 @@ import { BackupEngine, backupFilename, validatePassphrase } from './backup'
 import { Catalog, nameOf, pinDigest, validPin } from './catalog'
 import { CloudBackup, DeviceSecrets } from './cloud'
 import { MediaLibrary } from './media'
-import { lineAmounts, orderAmounts } from '../src/types/pricing'
-import type { Cashier, Category, FloorTable, MenuItem, Order, OrderInput, OrderItem, Settings, SettingsInput, Snapshot, Zone, ServexApi } from '../src/types/pos'
+import { FloorService } from './service'
+import type { Cashier, Category, FloorTable, MenuItem, Order, OrderItem, Settings, SettingsInput, Snapshot, Zone, ServexApi } from '../src/types/pos'
 
 const dev = !app.isPackaged && process.env.SERVEX_DEV === '1'
 const homePage = dev ? 'http://127.0.0.1:5173/' : pathToFileURL(path.join(app.getAppPath(), 'dist/index.html')).href
@@ -53,11 +53,17 @@ function createWindow() {
 
 function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cloud: CloudBackup, secrets: DeviceSecrets) {
   const catalog = new Catalog(db, media)
+  const service = new FloorService(db)
+  const printing = new Set<number>()
+  function ensureIdle(...ids: number[]) {
+    if (ids.some(id => printing.has(id))) throw new Error('Wait for the order’s print dialog to finish.')
+  }
   function register<K extends keyof ServexApi>(
     name: K, access: 'public' | 'staff' | 'manager' | 'admin',
     handle: (...args: Parameters<ServexApi[K]>) => ReturnType<ServexApi[K]> | Awaited<ReturnType<ServexApi[K]>>,
+    namespace: 'pos' | 'tables' = 'pos',
   ) {
-    ipcMain.handle(`pos:${name}`, (event: IpcMainInvokeEvent, ...args: Parameters<ServexApi[K]>) => {
+    ipcMain.handle(`${namespace}:${name}`, (event: IpcMainInvokeEvent, ...args: Parameters<ServexApi[K]>) => {
       if (!window || event.sender !== window.webContents || event.senderFrame !== event.sender.mainFrame ||
           event.senderFrame.url !== homePage) throw new Error('Invalid request origin.')
       if (access !== 'public' && !cashier) throw new Error('Sign in to continue.')
@@ -69,12 +75,11 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
   const settings = (): Settings => {
     const { license_key, ...config } = db.all<Omit<Settings, 'licenseConfigured' | 'licenseActive'> & { license_key: string | null }>(
       `SELECT restaurant_name, tagline, logo_path, address, phone, gstin, currency_symbol, tax_rate,
-        tax_inclusive, receipt_footer, cloud_sync_enabled, cloud_endpoint, license_key FROM settings`,
+        tax_inclusive, auto_cleaning, receipt_footer, cloud_sync_enabled, cloud_endpoint, license_key FROM settings`,
     )[0]
     return { ...config, licenseConfigured: Boolean(license_key), licenseActive: activeLicense(license_key) }
   }
   const localDay = () => db.all<{ date: string }>("SELECT date('now','localtime') AS date")[0].date
-  const orderById = (id: number) => db.all<Order>('SELECT * FROM orders WHERE id = ?', [id])[0]
   let nextSignIn = 0
   let nextOverride = 0
   register('signIn', 'public', (pin: string) => {
@@ -99,61 +104,79 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
       lastClose: db.all<{ created_at: string }>("SELECT created_at FROM audit_logs WHERE action = 'z-close' AND details = ? ORDER BY id DESC LIMIT 1", [localDay()])[0]?.created_at ?? null,
     }
   })
-  register('createOrder', 'staff', (input: OrderInput) => {
-    if (!input || !['dinein', 'parcel', 'room'].includes(input.type) || !Array.isArray(input.items) ||
-        input.items.length < 1 || input.items.length > 100) throw new Error('Add valid items to the order.')
-    if (input.type !== 'parcel') {
-      const table = db.all<FloorTable>('SELECT * FROM tables WHERE id = ?', [input.tableId])[0]
-      if (!table || table.status !== 'vacant' || (table.type === 'room') !== (input.type === 'room')) throw new Error('This table or room is unavailable.')
-    }
-    if (db.all("SELECT id FROM audit_logs WHERE action = 'z-close' AND details = ?", [localDay()]).length) {
-      throw new Error('The business day is closed.')
-    }
-    const config = settings()
-    const inclusive = Boolean(config.tax_inclusive)
-    const lines = input.items.map(({ id, quantity }) => {
-      const item = db.all<MenuItem>(`SELECT m.* FROM menu_items m JOIN categories c ON c.id = m.category_id
-        WHERE m.id = ? AND m.is_available = 1 AND c.is_active = 1 AND m.archived = 0`, [id])[0]
-      if (!item || !Number.isInteger(quantity) || quantity < 1 || quantity > 99) throw new Error('An item or quantity is unavailable.')
-      return { item, quantity, ...lineAmounts(item.price, quantity, item.tax_slab ?? config.tax_rate, inclusive) }
-    })
-    const totals = orderAmounts(lines, inclusive)
-    const table = input.type === 'parcel' ? null : input.tableId
-    db.transaction(sql => {
-      sql.run(`INSERT INTO orders (table_id, order_type, subtotal, tax_amount, grand_total, created_by)
-        VALUES (?, ?, ?, ?, ?, ?)`, [table, input.type, totals.subtotal, totals.tax, totals.total, cashier!.id])
-      const id = Number(sql.exec('SELECT last_insert_rowid()')[0].values[0][0])
-      sql.run('UPDATE orders SET bill_number = ? WHERE id = ?', [`SX-${String(id).padStart(5, '0')}`, id])
-      for (const { item, quantity, gross } of lines) {
-        sql.run(`INSERT INTO order_items (order_id, menu_item_id, item_name, unit_price, quantity, line_total)
-          VALUES (?, ?, ?, ?, ?, ?)`, [id, item.id, item.name, item.price, quantity, gross / 100])
-      }
-      if (table !== null) sql.run("UPDATE tables SET status = 'occupied' WHERE id = ?", [table])
-    })
+  register('saveLayout', 'manager', updates => service.saveLayout(updates), 'tables')
+  register('transfer', 'staff', input => {
+    ensureIdle(input.orderId)
+    service.transfer(input, cashier!.id)
+  }, 'tables')
+  register('merge', 'staff', input => {
+    ensureIdle(input.targetOrderId, input.sourceOrderId)
+    service.merge(input, cashier!.id)
+  }, 'tables')
+  register('updateStatus', 'staff', input => service.updateStatus(input, cashier!.id), 'tables')
+  register('createOrder', 'staff', input => service.createOrder(input, cashier!.id))
+  register('addOrderItems', 'staff', (id, revision, items) => {
+    ensureIdle(id)
+    service.addItems(id, revision, items, cashier!.id)
   })
-  register('payOrder', 'staff', (id: number, mode: string) => {
-    const order = orderById(id)
-    if (!order || !['open', 'billed'].includes(order.status) || !['Cash', 'Card', 'UPI'].includes(mode)) throw new Error('This payment cannot be recorded.')
-    db.transaction(sql => {
-      sql.run("UPDATE orders SET status = 'paid', payment_mode = ?, cash_tendered = ?, closed_at = CURRENT_TIMESTAMP WHERE id = ?", [mode, mode === 'Cash' ? order.grand_total : 0, id])
-      if (order.table_id !== null) sql.run("UPDATE tables SET status = 'vacant' WHERE id = ?", [order.table_id])
-    })
+  register('editBill', 'staff', input => {
+    ensureIdle(input.orderId)
+    service.editBill(input, cashier!.id)
   })
-  register('printKot', 'staff', async (id: number) => {
-    const order = orderById(id)
-    if (!order || !['open', 'billed'].includes(order.status)) throw new Error('This order is closed.')
-    const rows = db.all<OrderItem>('SELECT * FROM order_items WHERE order_id = ? AND kot_printed = 0', [id])
-    if (!rows.length) throw new Error('All items have already been sent to the printer.')
-    const actor = cashier
-    const ticket = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
+  register('payOrder', 'staff', (id, mode, revision) => {
+    ensureIdle(id)
+    service.payOrder(id, mode, revision)
+  })
+
+  async function printText(id: number, title: string, body: string[]) {
+    ensureIdle(id)
+    printing.add(id)
+    let ticket: BrowserWindow | undefined
     try {
-      const body = [order.bill_number, order.order_type.toUpperCase(), ...rows.map(row => `${row.quantity} × ${row.item_name}`)].join('\n')
-      const escaped = body.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      await ticket.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><title>Kitchen order ticket</title><h1>Kitchen order ticket</h1><pre>${escaped}</pre>`))
-      await new Promise<void>((resolve, reject) => ticket.webContents.print({ silent: false }, (ok, reason) => ok ? resolve() : reject(new Error(reason || 'Printing cancelled.'))))
-      if (cashier === actor) db.write('UPDATE order_items SET kot_printed = 1 WHERE order_id = ?', [id])
-    } finally { ticket.destroy() }
+      ticket = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
+      const escaped = body.join('\n').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      await ticket.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
+        `<!doctype html><meta charset="utf-8"><title>${title}</title><style>body{font:14px system-ui;margin:1em}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><h2>${title}</h2><pre>${escaped}</pre>`,
+      ))
+      const contents = ticket.webContents
+      await new Promise<void>((resolve, reject) => {
+        contents.print({ silent: false }, (ok, reason) => ok ? resolve() : reject(new Error(reason || 'Printing cancelled.')))
+      })
+    } finally {
+      printing.delete(id)
+      if (ticket && !ticket.isDestroyed()) ticket.destroy()
+    }
+  }
+
+  register('printKot', 'staff', async id => {
+    const order = service.activeOrder(id)
+    const rows = service.lines(id).filter(row => !row.kot_printed)
+    if (!rows.length) throw new Error('All items have already been sent to the printer.')
+    const location = order.table_id === null ? null : service.table(order.table_id)
+    await printText(id, 'Kitchen order ticket', [order.bill_number, location?.label ?? order.order_type.toUpperCase(),
+      ...rows.map(row => `${row.quantity} × ${row.item_name}`)])
+    db.transaction(sql => {
+      for (const row of rows) sql.run('UPDATE order_items SET kot_printed = 1 WHERE id = ? AND order_id = ?', [row.id, id])
+    })
   })
+
+  register('printBill', 'staff', async (id, revision) => {
+    const order = service.activeOrder(id, revision)
+    const actor = cashier!.id
+    const config = settings()
+    const location = order.table_id === null ? null : service.table(order.table_id)
+    const money = (value: number) => config.currency_symbol + value.toFixed(2)
+    const details = [config.restaurant_name, config.address, config.phone, config.gstin && `Tax ID: ${config.gstin}`,
+      '', `${order.bill_number} · ${location?.label ?? 'Takeaway'}`, new Date().toLocaleString(),
+      order.customer_name && `Guest: ${order.customer_name}`, '',
+      ...service.lines(id).map(row => `${row.quantity} × ${row.item_name}  ${money(row.line_total)}`), '',
+      `Subtotal: ${money(order.subtotal)}`, `Tax: ${money(order.tax_amount)}`,
+      order.discount_amount > 0 ? `Discount: ${money(order.discount_amount)}` : null,
+      `Total: ${money(order.grand_total)}`, '', config.receipt_footer]
+    await printText(id, 'Guest bill', details.filter((line): line is string => line !== null))
+    service.markPrinted(id, revision, actor)
+  })
+
   register('toggleItem', 'manager', (id: number) => db.write('UPDATE menu_items SET is_available = 1 - is_available WHERE id = ? AND archived = 0', [id]))
   register('closeDay', 'staff', (overridePin?: string) => {
     if (cashier?.role === 'cashier') {
@@ -183,7 +206,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     const name = nameOf(input.restaurant_name, 'restaurant name')
     const currency = nameOf(input.currency_symbol, 'currency symbol', 6)
     if (!Number.isFinite(input.tax_rate) || input.tax_rate < 0 || input.tax_rate > 100 ||
-        ![0, 1].includes(input.tax_inclusive)) throw new Error('Enter valid restaurant and tax settings.')
+        ![0, 1].includes(input.tax_inclusive) || (input.auto_cleaning !== undefined && ![0, 1].includes(input.auto_cleaning))) throw new Error('Enter valid restaurant and tax settings.')
     if (cashier?.role !== 'admin' && (input.managerPin !== undefined || input.licenseKey !== undefined)) {
       throw new Error('Administrator access is required for security and license settings.')
     }
@@ -192,9 +215,9 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     db.transaction(sql => {
       sql.run(`UPDATE settings SET restaurant_name = ?, tagline = ?, address = ?, phone = ?, gstin = ?,
         currency_symbol = ?, tax_rate = ?, tax_inclusive = ?, receipt_footer = ?,
-        manager_pin = COALESCE(?, manager_pin), license_key = COALESCE(?, license_key) WHERE id = 1`,
+        auto_cleaning = COALESCE(?, auto_cleaning), manager_pin = COALESCE(?, manager_pin), license_key = COALESCE(?, license_key) WHERE id = 1`,
       [name, clean(input.tagline), clean(input.address), clean(input.phone), clean(input.gstin), currency, input.tax_rate,
-        input.tax_inclusive, clean(input.receipt_footer), digest, input.licenseKey?.trim() ?? null])
+        input.tax_inclusive, clean(input.receipt_footer), input.auto_cleaning ?? null, digest, input.licenseKey?.trim() ?? null])
       sql.run("INSERT INTO audit_logs (user_id, action, entity_type, details) VALUES (?, 'settings-updated', 'settings', ?)",
         [cashier!.id, JSON.stringify({ managerPinChanged: digest !== null, licenseChanged: input.licenseKey !== undefined })])
     })
@@ -267,6 +290,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     if (confirm.response !== 1 || cashier !== actor) return false
     let localKey: string | undefined
     try { localKey = secrets.localKey() } catch { if (!passphrase) throw new Error('Enter a backup passphrase to continue without OS credential storage.') }
+    if (printing.size) throw new Error('Wait for the active print dialog before restoring a backup.')
     const previous = db.all<{ pin: string }>('SELECT pin FROM users WHERE id = ?', [actor.id])[0].pin
     backup.restore(result.filePaths[0], passphrase, localKey, localKey ?? passphrase)
     cloud.invalidate()

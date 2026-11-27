@@ -64,7 +64,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </div>
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-2 rounded-lg border bg-slate-50 px-3 py-2 text-xs font-semibold"><UserRound size={15} /> {cashier?.name} <span className="capitalize text-slate-500">{cashier?.role}</span></span>
-          <button className="primary h-9" onClick={() => startOrder('parcel')}><Plus size={17} /> New Takeaway <kbd className="rounded bg-white/20 px-1.5 py-0.5 text-[11px]">F1</kbd></button>
+          {route !== 'floor' && <button className="primary h-9" onClick={() => startOrder('parcel')}><Plus size={17} /> New Takeaway <kbd className="rounded bg-white/20 px-1.5 py-0.5 text-[11px]">F1</kbd></button>}
         </div>
       </header>
       <main className="min-h-0 flex-1 overflow-auto bg-slate-50 px-6 py-6">{children}</main>

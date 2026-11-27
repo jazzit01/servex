@@ -4,7 +4,7 @@ import { runAction, usePosStore } from '../store/usePosStore'
 import type { Order } from '../types/pos'
 
 function OrderCard({ order }: { order: Order }) {
-  const { data } = usePosStore()
+  const { data, resumeOrder } = usePosStore()
   const [mode, setMode] = useState<'Cash' | 'Card' | 'UPI'>('Cash')
   const [busy, setBusy] = useState(false)
   if (!data) return null
@@ -19,10 +19,11 @@ function OrderCard({ order }: { order: Order }) {
     <ul className="my-4 divide-y border-y text-sm">{items.map(item => <li className="flex justify-between gap-3 py-2" key={item.id}><span>{item.quantity} × {item.item_name}</span><span className="text-xs text-slate-500">{item.kot_printed ? 'Printed' : 'Pending'}</span></li>)}</ul>
     <div className="flex flex-wrap items-center gap-2">
       <button className="secondary mr-auto" disabled={busy || items.every(item => item.kot_printed)} onClick={() => void act(() => window.servexApi.printKot(order.id), 'Kitchen ticket printed.')}><Printer size={16} /> Print KOT</button>
+      <button className="secondary" disabled={busy} onClick={() => resumeOrder(order, true)}>Checkout</button>
       <select className="field w-auto" aria-label="Payment method" value={mode} onChange={event => setMode(event.target.value as typeof mode)}>
         <option>Cash</option><option>Card</option><option>UPI</option>
       </select>
-      <button className="primary" disabled={busy} onClick={() => void act(() => window.servexApi.payOrder(order.id, mode), 'Payment recorded.')}>Mark paid</button>
+      <button className="primary" disabled={busy} onClick={() => void act(() => window.servexApi.payOrder(order.id, mode, order.revision), 'Payment recorded.')}>Mark paid</button>
     </div>
   </article>
 }

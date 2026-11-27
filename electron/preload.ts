@@ -1,9 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ServexApi } from '../src/types/pos'
 
-function channel<K extends keyof ServexApi>(name: K) {
+function channel<K extends keyof ServexApi>(name: K, namespace: 'pos' | 'tables' = 'pos') {
   return (...args: Parameters<ServexApi[K]>): ReturnType<ServexApi[K]> =>
-    ipcRenderer.invoke(`pos:${name}`, ...args) as ReturnType<ServexApi[K]>
+    ipcRenderer.invoke(`${namespace}:${name}`, ...args) as ReturnType<ServexApi[K]>
 }
 
 const api: ServexApi = {
@@ -11,6 +11,13 @@ const api: ServexApi = {
   lock: channel('lock'),
   snapshot: channel('snapshot'),
   createOrder: channel('createOrder'),
+  saveLayout: channel('saveLayout', 'tables'),
+  transfer: channel('transfer', 'tables'),
+  merge: channel('merge', 'tables'),
+  updateStatus: channel('updateStatus', 'tables'),
+  addOrderItems: channel('addOrderItems'),
+  editBill: channel('editBill'),
+  printBill: channel('printBill'),
   payOrder: channel('payOrder'),
   printKot: channel('printKot'),
   toggleItem: channel('toggleItem'),

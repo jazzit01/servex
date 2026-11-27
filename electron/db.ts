@@ -54,6 +54,15 @@ ALTER TABLE settings ADD COLUMN pin_salt TEXT;
 ALTER TABLE settings ADD COLUMN cloud_last_synced TEXT;
 ALTER TABLE menu_items ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;`
 
+const v3Columns = `
+ALTER TABLE settings ADD COLUMN auto_cleaning INTEGER NOT NULL DEFAULT 0 CHECK (auto_cleaning IN (0, 1));
+ALTER TABLE orders ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN guest_count INTEGER;
+ALTER TABLE order_items ADD COLUMN net_minor INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE order_items ADD COLUMN tax_minor INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE order_items ADD COLUMN tax_rate_snapshot REAL;
+ALTER TABLE order_items ADD COLUMN tax_inclusive_snapshot INTEGER;`
+
 export function atomicWrite(file: string, bytes: Uint8Array) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const temp = path.join(path.dirname(file), `.${randomUUID()}.tmp`)
@@ -72,7 +81,7 @@ export function hashPin(pin: string, salt: string) {
 function migrate(db: Database) {
   db.run('PRAGMA foreign_keys = ON')
   const version = Number(db.exec('PRAGMA user_version')[0].values[0][0])
-  if (version > 2) throw new Error('This database requires a newer ServeX version.')
+  if (version > 3) throw new Error('This database requires a newer ServeX version.')
   db.run('BEGIN')
   if (version < 1) db.run(schema + 'PRAGMA user_version = 1;')
   if (!db.exec('SELECT id FROM settings').length) {
@@ -112,6 +121,32 @@ function migrate(db: Database) {
     }
     db.run('PRAGMA user_version = 2')
   }
+  if (version < 3) {
+    db.run(v3Columns)
+    // Allocate legacy order totals across their lines using cumulative weights.
+    // The allocated cents sum to the original recorded subtotal and tax.
+    db.run(`
+      WITH weighted AS (
+        SELECT i.id, o.subtotal, o.tax_amount, MAX(COALESCE(i.line_total, 0), 0) AS weight,
+          SUM(MAX(COALESCE(i.line_total, 0), 0)) OVER (PARTITION BY i.order_id ORDER BY i.id) AS running,
+          SUM(MAX(COALESCE(i.line_total, 0), 0)) OVER (PARTITION BY i.order_id) AS total,
+          ROW_NUMBER() OVER (PARTITION BY i.order_id ORDER BY i.id) AS position,
+          COUNT(*) OVER (PARTITION BY i.order_id) AS count
+        FROM order_items i JOIN orders o ON o.id = i.order_id
+      ), ratios AS (
+        SELECT id, subtotal, tax_amount,
+          CASE WHEN total > 0 THEN running / total ELSE 1.0 * position / count END AS through_line,
+          CASE WHEN total > 0 THEN (running - weight) / total ELSE 1.0 * (position - 1) / count END AS before_line
+        FROM weighted
+      )
+      UPDATE order_items AS i SET
+        net_minor = ROUND(COALESCE(r.subtotal, 0) * 100 * r.through_line) - ROUND(COALESCE(r.subtotal, 0) * 100 * r.before_line),
+        tax_minor = ROUND(COALESCE(r.tax_amount, 0) * 100 * r.through_line) - ROUND(COALESCE(r.tax_amount, 0) * 100 * r.before_line)
+      FROM ratios r WHERE r.id = i.id;
+      CREATE INDEX IF NOT EXISTS orders_active_location ON orders(table_id) WHERE status IN ('open','billed');
+      PRAGMA user_version = 3;
+    `)
+  }
   db.run('COMMIT')
 }
 
@@ -149,13 +184,14 @@ export class PosDatabase {
     this.transaction(db => db.run(sql, params))
   }
 
-  transaction(run: (db: Database) => void) {
+  transaction<T>(run: (db: Database) => T) {
     const before = this.bytes()
     try {
       this.db.run('BEGIN IMMEDIATE')
-      run(this.db)
+      const result = run(this.db)
       this.db.run('COMMIT')
       this.persist()
+      return result
     } catch (error) {
       this.db.close()
       this.db = new this.engine.Database(before)
@@ -183,7 +219,8 @@ export class PosDatabase {
       const reference = new this.engine.Database()
       try {
         reference.run(schema)
-        if (version === 2) reference.run(v2Columns)
+        if (version >= 2) reference.run(v2Columns)
+        if (version >= 3) reference.run(v3Columns)
         const tables = reference.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")[0].values.flat()
         if (candidate.exec("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'view')").length ||
             tables.some(table => ['table_info', 'foreign_key_list'].some(pragma =>

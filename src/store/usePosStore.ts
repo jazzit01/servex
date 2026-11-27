@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Cashier, OrderType, Route, Snapshot } from '../types/pos'
+import type { Cashier, Order, OrderType, Route, Snapshot } from '../types/pos'
 
 interface PosState {
   route: Route
@@ -8,9 +8,14 @@ interface PosState {
   orderType: OrderType
   tableId: number | null
   billingSession: number
+  orderId: number | null
+  openCheckout: boolean
+  floorLayoutDirty: boolean
   toast: { message: string; error: boolean } | null
   navigate(route: Route): void
+  setFloorLayoutDirty(dirty: boolean): void
   startOrder(type: OrderType, tableId?: number): void
+  resumeOrder(order: Order, checkout?: boolean): void
   notify(message: string, error?: boolean): void
   refresh(): Promise<void>
   signIn(pin: string): Promise<boolean>
@@ -18,9 +23,20 @@ interface PosState {
 }
 let toastTimer: ReturnType<typeof setTimeout>
 export const usePosStore = create<PosState>((set, get) => ({
-  route: 'floor', cashier: null, data: null, orderType: 'parcel', tableId: null, billingSession: 0, toast: null,
-  navigate: route => set({ route }),
-  startOrder: (orderType, tableId) => set(state => ({ route: 'billing', orderType, tableId: tableId ?? null, billingSession: state.billingSession + 1 })),
+  route: 'floor', cashier: null, data: null, orderType: 'parcel', tableId: null, orderId: null, openCheckout: false, floorLayoutDirty: false, billingSession: 0, toast: null,
+  setFloorLayoutDirty: floorLayoutDirty => set({ floorLayoutDirty }),
+  navigate: route => {
+    if (route !== 'floor' && get().floorLayoutDirty && !window.confirm('Leave and discard unsaved layout changes?')) return
+    set({ route })
+  },
+  startOrder: (orderType, tableId) => {
+    if (get().floorLayoutDirty && !window.confirm('Leave and discard unsaved layout changes?')) return
+    set(state => ({ route: 'billing', orderType, tableId: tableId ?? null, orderId: null, openCheckout: false, billingSession: state.billingSession + 1 }))
+  },
+  resumeOrder: (order, openCheckout = false) => set(state => ({
+    route: 'billing', orderType: order.order_type, tableId: order.table_id, orderId: order.id, openCheckout,
+    billingSession: state.billingSession + 1,
+  })),
   notify: (message, error = false) => {
     clearTimeout(toastTimer)
     set({ toast: { message, error } })
@@ -34,7 +50,7 @@ export const usePosStore = create<PosState>((set, get) => ({
     const cashier = await window.servexApi.signIn(pin)
     if (!cashier) return false
     await get().refresh()
-    set({ cashier, route: 'floor' })
+    set({ cashier, route: 'floor', orderId: null, tableId: null, orderType: 'parcel', openCheckout: false })
     return true
   },
   lock: async () => {

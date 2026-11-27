@@ -16,6 +16,7 @@ function ProfileSettings() {
   const { data, cashier } = usePosStore()
   const [busy, setBusy] = useState(false)
   const [showPin, setShowPin] = useState(false)
+  const [autoCleaning, setAutoCleaning] = useState(Boolean(data?.settings.auto_cleaning))
   const [inclusive, setInclusive] = useState(Boolean(data?.settings.tax_inclusive))
   if (!data || !cashier) return null
   const admin = cashier.role === 'admin'
@@ -35,7 +36,7 @@ function ProfileSettings() {
     const saved = await act(() => window.servexApi.updateSettings({
       restaurant_name: string('restaurant_name'), tagline: string('tagline') || null, phone: string('phone') || null,
       address: string('address') || null, gstin: string('gstin') || null, receipt_footer: string('receipt_footer') || null,
-      currency_symbol: string('currency_symbol'), tax_rate: Number(form.get('tax_rate')), tax_inclusive: Number(inclusive),
+      currency_symbol: string('currency_symbol'), tax_rate: Number(form.get('tax_rate')), tax_inclusive: Number(inclusive), auto_cleaning: Number(autoCleaning),
       managerPin: string('managerPin') || undefined, licenseKey: string('licenseKey') || undefined,
     }), 'Settings saved.')
     if (saved) {
@@ -73,6 +74,10 @@ function ProfileSettings() {
         </div>
         <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm font-medium">
           Tax Inclusive Pricing <Switch checked={inclusive} onChange={setInclusive} label="Tax Inclusive Pricing" disabled={disabled} />
+        </div>
+        <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm font-medium">
+          Auto-mark tables as Cleaning after payment
+          <Switch checked={autoCleaning} onChange={setAutoCleaning} label="Auto-mark tables as Cleaning after payment" disabled={disabled} />
         </div>
         {admin && <div className="relative">
           <Field label="Manager Override PIN"><input className="field pr-10" name="managerPin" type={showPin ? 'text' : 'password'}

@@ -44,7 +44,7 @@ export default function App() {
   useEffect(() => {
     function shortcuts(event: KeyboardEvent) {
       if (!cashier || event.repeat || event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) return
-      if (!['F1', 'F2', 'F3'].includes(event.key)) return
+      if (!['F1', 'F2', 'F3'].includes(event.key) || document.querySelector('dialog[open]')) return
       event.preventDefault()
       if (event.key === 'F1') startOrder('parcel')
       if (event.key === 'F2') navigate('floor')

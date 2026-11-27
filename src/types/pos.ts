@@ -13,13 +13,14 @@ export interface Settings {
   currency_symbol: string
   tax_rate: number
   tax_inclusive: number
+  auto_cleaning: number
   receipt_footer: string | null
   cloud_sync_enabled: number
   cloud_endpoint: string | null
   licenseConfigured: boolean
   licenseActive: boolean
 }
-export type SettingsInput = Pick<Settings, 'restaurant_name' | 'tagline' | 'address' | 'phone' | 'gstin' | 'currency_symbol' | 'tax_rate' | 'tax_inclusive' | 'receipt_footer'> & { managerPin?: string; licenseKey?: string }
+export type SettingsInput = Pick<Settings, 'restaurant_name' | 'tagline' | 'address' | 'phone' | 'gstin' | 'currency_symbol' | 'tax_rate' | 'tax_inclusive' | 'receipt_footer'> & { managerPin?: string; licenseKey?: string; auto_cleaning?: number }
 export interface Zone { id: number; name: string; sort_order: number }
 export interface FloorTable {
   id: number; zone_id: number; label: string; type: 'table' | 'garden' | 'room'
@@ -33,6 +34,7 @@ export interface MenuItem {
 export interface Order {
   id: number; bill_number: string; table_id: number | null; order_type: OrderType
   status: 'open' | 'billed' | 'paid' | 'void'; subtotal: number; tax_amount: number
+  discount_amount: number; revision: number; customer_name: string | null; guest_count: number | null
   grand_total: number; created_at: string; closed_at: string | null; payment_mode: string | null
 }
 export interface OrderItem {
@@ -45,14 +47,21 @@ export interface Snapshot {
   businessDate: string; lastClose: string | null; actor: Cashier; cloud: CloudStatus | null
 }
 export interface OrderInput {
-  type: OrderType; tableId: number | null; items: { id: number; quantity: number }[]
+  type: OrderType; tableId: number | null; items: CartItem[]; guestName?: string; guestCount?: number
 }
 export interface ServexApi {
   signIn(pin: string): Promise<Cashier | null>
   lock(): Promise<void>
   snapshot(): Promise<Snapshot>
-  createOrder(order: OrderInput): Promise<void>
-  payOrder(id: number, mode: 'Cash' | 'Card' | 'UPI'): Promise<void>
+  createOrder(order: OrderInput): Promise<number>
+  payOrder(id: number, mode: PaymentMode, revision?: number): Promise<void>
+  addOrderItems(id: number, revision: number, items: CartItem[]): Promise<void>
+  editBill(input: BillEdit): Promise<void>
+  printBill(id: number, revision: number): Promise<void>
+  saveLayout(updates: LayoutUpdate[]): Promise<void>
+  transfer(input: TableTransfer): Promise<void>
+  merge(input: TableMerge): Promise<void>
+  updateStatus(input: TableStatusUpdate): Promise<void>
   printKot(id: number): Promise<void>
   toggleItem(id: number): Promise<void>
   closeDay(overridePin?: string): Promise<void>
@@ -94,3 +103,17 @@ export interface LocationInput {
 export interface CloudInput { enabled: boolean; endpoint: string; token?: string; passphrase?: string }
 export interface CloudStatus { tokenConfigured: boolean; passphraseConfigured: boolean; lastSynced: string | null }
 export interface PickedMedia { name: string; preview: string }
+
+export type PaymentMode = 'Cash' | 'Card' | 'UPI'
+export interface CartItem { id: number; quantity: number }
+export interface LayoutRect { x_pos: number; y_pos: number; width: number; height: number }
+export type LayoutUpdate = LayoutRect & ({ id: number; zoneId: number } | {
+  id?: undefined; zoneId: number; label: string; type: FloorTable['type']; capacity: number
+})
+export interface TableTransfer { orderId: number; fromTableId: number; toTableId: number }
+export interface TableMerge { targetOrderId: number; sourceOrderId: number; sourceTableId: number }
+export interface TableStatusUpdate { tableId: number; status: 'vacant' | 'cleaning' }
+export interface BillEdit {
+  orderId: number; revision: number; guestName: string; guestCount: number | null
+  quantities: { id: number; quantity: number }[]
+}

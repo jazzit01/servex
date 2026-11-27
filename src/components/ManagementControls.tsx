@@ -18,7 +18,7 @@ export function Field({ label, children }: { label: string; children: ReactNode 
   </label>
 }
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, onClose, children, compact }: { title: string; onClose: () => void; children: ReactNode; compact?: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const toast = usePosStore(state => state.toast)
   useEffect(() => {
@@ -27,7 +27,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
     return () => { if (element.open) element.close() }
   }, [])
   return <dialog ref={dialog} aria-label={title} onCancel={event => { event.preventDefault(); onClose() }}
-    className="panel max-h-[90vh] w-[480px] max-w-[90vw] overflow-auto p-0 backdrop:bg-slate-950/40">
+    className={`panel max-h-[90vh] max-w-[90vw] overflow-auto p-0 backdrop:bg-slate-950/40 ${compact ? 'w-[420px]' : 'w-[480px]'}`}>
     <div className="flex items-center justify-between border-b px-5 py-4">
       <h2>{title}</h2><button className="secondary p-1.5" type="button" aria-label="Close dialog" onClick={onClose}><X size={16} /></button>
     </div>
