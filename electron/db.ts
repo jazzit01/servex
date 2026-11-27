@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID, scryptSync } from 'node:crypto'
 import initSqlJs, { Database, SqlJsStatic, SqlValue } from 'sql.js'
 
 const schema = `
@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   entity_id INTEGER, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );`
 
+const v2Columns = `
+ALTER TABLE settings ADD COLUMN pin_salt TEXT;
+ALTER TABLE settings ADD COLUMN cloud_last_synced TEXT;
+ALTER TABLE menu_items ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;`
+
 export function atomicWrite(file: string, bytes: Uint8Array) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const temp = path.join(path.dirname(file), `.${randomUUID()}.tmp`)
@@ -60,10 +65,14 @@ export function atomicWrite(file: string, bytes: Uint8Array) {
   }
 }
 
+export function hashPin(pin: string, salt: string) {
+  return scryptSync(pin, salt, 32).toString('hex')
+}
+
 function migrate(db: Database) {
   db.run('PRAGMA foreign_keys = ON')
   const version = Number(db.exec('PRAGMA user_version')[0].values[0][0])
-  if (version > 1) throw new Error('This database requires a newer ServeX version.')
+  if (version > 2) throw new Error('This database requires a newer ServeX version.')
   db.run('BEGIN')
   if (version < 1) db.run(schema + 'PRAGMA user_version = 1;')
   if (!db.exec('SELECT id FROM settings').length) {
@@ -92,6 +101,16 @@ function migrate(db: Database) {
         db.run('INSERT INTO menu_items (category_id, name, price, is_veg) VALUES (?, ?, ?, ?)', [id, item, price, veg])
       }
     })
+  }
+  if (version < 2) {
+    db.run(v2Columns)
+    const salt = randomBytes(32).toString('hex')
+    const pin = String(db.exec('SELECT manager_pin FROM settings')[0].values[0][0] ?? '1234')
+    db.run('UPDATE settings SET pin_salt = ?, manager_pin = ?', [salt, hashPin(pin, salt)])
+    for (const [id, oldPin] of db.exec('SELECT id, pin FROM users')[0]?.values ?? []) {
+      db.run('UPDATE users SET pin = ? WHERE id = ?', [hashPin(String(oldPin), salt), id])
+    }
+    db.run('PRAGMA user_version = 2')
   }
   db.run('COMMIT')
 }
@@ -145,7 +164,7 @@ export class PosDatabase {
     }
   }
 
-  private bytes() {
+  bytes() {
     const bytes = this.db.export()
     this.db.run('PRAGMA foreign_keys = ON')
     return bytes
@@ -155,19 +174,34 @@ export class PosDatabase {
     atomicWrite(this.file, this.bytes())
   }
 
-  exportTo(file: string) { atomicWrite(file, this.bytes()) }
-
-  importFrom(file: string) {
-    const candidate = new this.engine.Database(fs.readFileSync(file))
+  restore(bytes: Uint8Array, beforeCommit: () => void, legacy = false) {
+    const candidate = new this.engine.Database(bytes)
     try {
       if (candidate.exec('PRAGMA quick_check')[0]?.values[0][0] !== 'ok') throw new Error('The backup is damaged.')
-      const required = ['settings', 'users', 'zones', 'tables', 'categories', 'menu_items', 'orders', 'order_items', 'audit_logs']
-      const tables = new Set(candidate.exec("SELECT name FROM sqlite_master WHERE type = 'table'")[0]?.values.flat())
-      if (!required.every(table => tables.has(table))) throw new Error('Select a ServeX backup.')
+      const version = Number(candidate.exec('PRAGMA user_version')[0].values[0][0])
+      if (legacy && version > 1) throw new Error('Current ServeX backups must be encrypted.')
+      const reference = new this.engine.Database()
+      try {
+        reference.run(schema)
+        if (version === 2) reference.run(v2Columns)
+        const tables = reference.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")[0].values.flat()
+        if (candidate.exec("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'view')").length ||
+            tables.some(table => ['table_info', 'foreign_key_list'].some(pragma =>
+              JSON.stringify(candidate.exec(`PRAGMA ${pragma}(${table})`)) !== JSON.stringify(reference.exec(`PRAGMA ${pragma}(${table})`))))) {
+          throw new Error('The backup does not match the ServeX database schema.')
+        }
+      } finally { reference.close() }
       migrate(candidate)
       if (candidate.exec('PRAGMA foreign_key_check').length) throw new Error('The backup has invalid references.')
-      atomicWrite(this.file, candidate.export())
+      const settings = candidate.exec('SELECT pin_salt FROM settings WHERE id = 1')
+      if (!/^[0-9a-f]{64}$/.test(String(settings[0]?.values[0][0]))) throw new Error('The backup is missing ServeX settings.')
+      if (!candidate.exec("SELECT id FROM users WHERE role = 'admin' AND is_active = 1 LIMIT 1").length) {
+        throw new Error('The backup has no active administrator.')
+      }
+      const exported = candidate.export()
       candidate.run('PRAGMA foreign_keys = ON')
+      beforeCommit()
+      atomicWrite(this.file, exported)
     } catch (error) {
       candidate.close()
       throw error

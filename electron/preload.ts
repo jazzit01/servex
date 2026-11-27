@@ -1,18 +1,40 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ServexApi } from '../src/types/pos'
 
+function channel<K extends keyof ServexApi>(name: K) {
+  return (...args: Parameters<ServexApi[K]>): ReturnType<ServexApi[K]> =>
+    ipcRenderer.invoke(`pos:${name}`, ...args) as ReturnType<ServexApi[K]>
+}
+
 const api: ServexApi = {
-  signIn: pin => ipcRenderer.invoke('pos:sign-in', pin),
-  lock: () => ipcRenderer.invoke('pos:lock'),
-  snapshot: () => ipcRenderer.invoke('pos:snapshot'),
-  createOrder: order => ipcRenderer.invoke('pos:create-order', order),
-  payOrder: (id, mode) => ipcRenderer.invoke('pos:pay-order', id, mode),
-  printKot: id => ipcRenderer.invoke('pos:print-kot', id),
-  toggleItem: id => ipcRenderer.invoke('pos:toggle-item', id),
-  closeDay: () => ipcRenderer.invoke('pos:close-day'),
-  updateSettings: input => ipcRenderer.invoke('pos:update-settings', input),
-  pickLogo: () => ipcRenderer.invoke('pos:pick-logo'),
-  exportBackup: () => ipcRenderer.invoke('pos:export-backup'),
-  importBackup: () => ipcRenderer.invoke('pos:import-backup'),
+  signIn: channel('signIn'),
+  lock: channel('lock'),
+  snapshot: channel('snapshot'),
+  createOrder: channel('createOrder'),
+  payOrder: channel('payOrder'),
+  printKot: channel('printKot'),
+  toggleItem: channel('toggleItem'),
+  closeDay: channel('closeDay'),
+  updateSettings: channel('updateSettings'),
+  pickLogo: channel('pickLogo'),
+  removeLogo: channel('removeLogo'),
+  pickMedia: channel('pickMedia'),
+  readMedia: channel('readMedia'),
+  listStaff: channel('listStaff'),
+  saveStaff: channel('saveStaff'),
+  saveCategory: channel('saveCategory'),
+  moveCategory: channel('moveCategory'),
+  saveMenuItem: channel('saveMenuItem'),
+  deleteMenuItem: channel('deleteMenuItem'),
+  importMenuCsv: channel('importMenuCsv'),
+  exportMenuCsv: channel('exportMenuCsv'),
+  saveZone: channel('saveZone'),
+  deleteZone: channel('deleteZone'),
+  saveLocations: channel('saveLocations'),
+  deleteLocation: channel('deleteLocation'),
+  exportBackup: channel('exportBackup'),
+  importBackup: channel('importBackup'),
+  updateCloud: channel('updateCloud'),
+  syncCloud: channel('syncCloud'),
 }
 contextBridge.exposeInMainWorld('servexApi', api)

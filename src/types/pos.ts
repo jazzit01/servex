@@ -16,8 +16,10 @@ export interface Settings {
   receipt_footer: string | null
   cloud_sync_enabled: number
   cloud_endpoint: string | null
+  licenseConfigured: boolean
+  licenseActive: boolean
 }
-export type SettingsInput = Pick<Settings, 'restaurant_name' | 'tagline' | 'address' | 'phone' | 'gstin' | 'currency_symbol' | 'tax_rate' | 'tax_inclusive' | 'receipt_footer'>
+export type SettingsInput = Pick<Settings, 'restaurant_name' | 'tagline' | 'address' | 'phone' | 'gstin' | 'currency_symbol' | 'tax_rate' | 'tax_inclusive' | 'receipt_footer'> & { managerPin?: string; licenseKey?: string }
 export interface Zone { id: number; name: string; sort_order: number }
 export interface FloorTable {
   id: number; zone_id: number; label: string; type: 'table' | 'garden' | 'room'
@@ -40,7 +42,7 @@ export interface OrderItem {
 export interface Snapshot {
   settings: Settings; logo: string | null; zones: Zone[]; tables: FloorTable[]
   categories: Category[]; menu: MenuItem[]; orders: Order[]; orderItems: OrderItem[]
-  businessDate: string; lastClose: string | null
+  businessDate: string; lastClose: string | null; actor: Cashier; cloud: CloudStatus | null
 }
 export interface OrderInput {
   type: OrderType; tableId: number | null; items: { id: number; quantity: number }[]
@@ -53,10 +55,42 @@ export interface ServexApi {
   payOrder(id: number, mode: 'Cash' | 'Card' | 'UPI'): Promise<void>
   printKot(id: number): Promise<void>
   toggleItem(id: number): Promise<void>
-  closeDay(): Promise<void>
+  closeDay(overridePin?: string): Promise<void>
   updateSettings(input: SettingsInput): Promise<void>
   pickLogo(): Promise<boolean>
-  exportBackup(): Promise<boolean>
-  importBackup(): Promise<boolean>
+  removeLogo(): Promise<void>
+  pickMedia(): Promise<PickedMedia | null>
+  readMedia(name: string): Promise<string | null>
+  listStaff(): Promise<StaffUser[]>
+  saveStaff(input: StaffInput): Promise<void>
+  saveCategory(input: CategoryInput): Promise<void>
+  moveCategory(id: number, direction: -1 | 1): Promise<void>
+  saveMenuItem(input: MenuInput): Promise<void>
+  deleteMenuItem(id: number): Promise<void>
+  importMenuCsv(): Promise<number | null>
+  exportMenuCsv(template: boolean): Promise<boolean>
+  saveZone(input: ZoneInput): Promise<void>
+  deleteZone(id: number): Promise<void>
+  saveLocations(input: LocationInput[]): Promise<void>
+  deleteLocation(id: number): Promise<void>
+  exportBackup(passphrase: string): Promise<boolean>
+  importBackup(passphrase: string): Promise<false | 'restored' | 'locked'>
+  updateCloud(input: CloudInput): Promise<void>
+  syncCloud(): Promise<void>
 }
 declare global { interface Window { servexApi: ServexApi } }
+
+export interface StaffUser extends Cashier { is_active: number }
+export interface StaffInput { id?: number; name: string; role: Role; pin?: string; active: boolean }
+export interface CategoryInput { id?: number; name: string; active: boolean }
+export interface MenuInput {
+  id?: number; categoryId: number; name: string; price: number; tax: number
+  veg: boolean; available: boolean; imagePath: string | null
+}
+export interface ZoneInput { id?: number; name: string }
+export interface LocationInput {
+  id?: number; zoneId: number; label: string; type: FloorTable['type']; capacity: number
+}
+export interface CloudInput { enabled: boolean; endpoint: string; token?: string; passphrase?: string }
+export interface CloudStatus { tokenConfigured: boolean; passphraseConfigured: boolean; lastSynced: string | null }
+export interface PickedMedia { name: string; preview: string }

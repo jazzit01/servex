@@ -26,7 +26,10 @@ export const usePosStore = create<PosState>((set, get) => ({
     set({ toast: { message, error } })
     toastTimer = setTimeout(() => set({ toast: null }), 4500)
   },
-  refresh: async () => set({ data: await window.servexApi.snapshot() }),
+  refresh: async () => {
+    const data = await window.servexApi.snapshot()
+    set(state => ({ data, cashier: state.cashier ? data.actor : null }))
+  },
   signIn: async pin => {
     const cashier = await window.servexApi.signIn(pin)
     if (!cashier) return false
