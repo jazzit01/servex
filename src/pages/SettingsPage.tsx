@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Building2, CloudUpload, Eye, EyeOff, ImagePlus, Layers, ShieldCheck, Trash2, Users } from 'lucide-react'
 import { Field, Switch } from '../components/ManagementControls'
+import MobileWaiterSettings from '../components/settings/MobileWaiterSettings'
 import BackupSettings from '../components/settings/BackupSettings'
 import FloorSettings from '../components/settings/FloorSettings'
 import StaffSettings from '../components/settings/StaffSettings'
@@ -119,6 +120,7 @@ const tabs = [
   { id: 'staff', label: 'Staff & PINs', icon: Users },
   { id: 'floor', label: 'Zones & locations', icon: Layers },
   { id: 'backup', label: 'Backup & cloud', icon: CloudUpload },
+  { id: 'mobile', label: 'Mobile Waiter Sync', icon: Layers },
 ] as const
 
 export default function SettingsPage() {
@@ -132,6 +134,6 @@ export default function SettingsPage() {
         key={id} aria-pressed={tab === id} onClick={() => setTab(id)}><Icon size={16} />{label}</button>)}
     </nav>
     {tab === 'profile' || cashier?.role !== 'admin' ? <ProfileSettings /> :
-      tab === 'staff' ? <StaffSettings /> : tab === 'floor' ? <FloorSettings /> : <BackupSettings />}
+      tab === 'staff' ? <StaffSettings /> : tab === 'floor' ? <FloorSettings /> : tab === 'mobile' ? <MobileWaiterSettings /> : <BackupSettings />}
   </div>
 }

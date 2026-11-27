@@ -1,4 +1,5 @@
 import type { Database } from 'sql.js'
+import { closedDay } from './reports'
 import { nameOf } from './catalog'
 import type { PosDatabase } from './db'
 import { GRID, MAX_CANVAS, MIN_HEIGHT, MIN_WIDTH } from '../src/types/floorLayout'
@@ -133,7 +134,7 @@ export class FloorService {
       [net / 100, tax / 100, discount / 100, (net + tax - discount) / 100, order.id])
   }
 
-  createOrder(input: OrderInput, actor: number) {
+  createOrder(input: OrderInput, actor: number, mobile?: { key: string; hash: string }) {
     if (!input || !['dinein', 'parcel', 'room'].includes(input.type)) throw new Error('Choose a valid order type.')
     const tableId = input.type === 'parcel' ? null : input.tableId
     if (input.type !== 'parcel') {
@@ -141,7 +142,7 @@ export class FloorService {
       if (!table || table.status !== 'vacant' || this.atLocation(table.id).length ||
           (table.type === 'room') !== (input.type === 'room')) throw new Error('This table or room is unavailable.')
     }
-    if (this.db.all("SELECT id FROM audit_logs WHERE action = 'z-close' AND details = date('now','localtime')").length) {
+    if (this.db.all(`SELECT id FROM audit_logs WHERE ${closedDay} AND details = date('now','localtime')`).length) {
       throw new Error('The business day is closed.')
     }
     const lines = this.menuLines(input.items)
@@ -154,6 +155,10 @@ export class FloorService {
       this.insertLines(sql, id, lines)
       this.recalculate(sql, { id, discount_amount: 0 })
       if (tableId !== null) sql.run("UPDATE tables SET status = 'occupied' WHERE id = ?", [tableId])
+      if (mobile) {
+        sql.run('INSERT INTO lan_requests (request_id,payload,order_id) VALUES (?,?,?)', [mobile.key, mobile.hash, id])
+        audit(sql, actor, 'MOBILE_ORDER', 'order', id, { channel: 'LAN' })
+      }
       return id
     })
   }
@@ -347,6 +352,9 @@ export class FloorService {
 
   voidReceipt(id: number, actor: number) {
     const order = this.paidBill(id)
+    if (this.db.all(`SELECT id FROM audit_logs WHERE ${closedDay} AND details=date('now','localtime')`).length) {
+      throw new Error('The current business day is closed. Record the reversal in the next business day.')
+    }
     this.db.transaction(sql => {
       sql.run("UPDATE orders SET status = 'void', revision = revision + 1 WHERE id = ?", [id])
       audit(sql, actor, 'VOID_RECEIPT', 'order', id, { bill: order.bill_number, amount: order.grand_total, mode: order.payment_mode })

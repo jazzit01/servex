@@ -28,6 +28,22 @@ const api: ServexApi = {
   voidReceipt: channel('voidReceipt'),
   printPreview: channel('printPreview'),
   toggleItem: channel('toggleItem'),
+  startup: channel('startup'),
+  setupLogo: channel('setupLogo'),
+  finishSetup: channel('finishSetup'),
+  restoreSetup: channel('restoreSetup'),
+  activateLicense: channel('activateLicense'),
+  analytics: channel('analytics'),
+  auditEntries: channel('auditEntries'),
+  exportAudit: channel('exportAudit'),
+  getZReport: channel('getZReport'),
+  lanStatus: channel('lanStatus'),
+  configureLan: channel('configureLan'),
+  onLanChange: listener => {
+    const wrapped = () => listener()
+    ipcRenderer.on('pos:lanChanged', wrapped)
+    return () => { ipcRenderer.removeListener('pos:lanChanged', wrapped) }
+  },
   closeDay: channel('closeDay'),
   updateSettings: channel('updateSettings'),
   pickLogo: channel('pickLogo'),

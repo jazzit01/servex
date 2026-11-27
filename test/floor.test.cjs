@@ -92,7 +92,12 @@ test('v2 migration preserves the recorded cents of existing active orders', asyn
   const SQL = await initSqlJs()
   const legacy = new SQL.Database(db.bytes())
   t.after(() => legacy.close())
-  legacy.run(`DROP TABLE kitchen_tickets;
+  legacy.run(`DROP TABLE z_reports;
+    DROP TABLE lan_requests;
+    ALTER TABLE settings DROP COLUMN onboarding_completed;
+    ALTER TABLE settings DROP COLUMN lan_enabled;
+    ALTER TABLE settings DROP COLUMN lan_actor;
+    DROP TABLE kitchen_tickets;
     DROP TABLE bill_sequences;
     ALTER TABLE orders DROP COLUMN receipt_json;
     ALTER TABLE settings DROP COLUMN printer_name;

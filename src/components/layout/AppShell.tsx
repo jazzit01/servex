@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { BarChart3, ChefHat, ChevronsLeft, ChevronsRight, LayoutGrid, Lock, Plus, Receipt, Settings, UserRound, UtensilsCrossed } from 'lucide-react'
 import { usePosStore } from '../../store/usePosStore'
-import type { Route } from '../../types/pos'
+import type { LicenseState, Route } from '../../types/pos'
 
 const links = [
   { route: 'floor', label: 'Floors & Rooms', icon: LayoutGrid },
@@ -23,7 +23,7 @@ function Brand({ custom, name, collapsed }: { custom: string | null; name: strin
   </>
 }
 
-export default function AppShell({ children }: { children: ReactNode }) {
+export default function AppShell({ children, license, activate }: { children: ReactNode; license: LicenseState; activate: () => void }) {
   const { route, cashier, data, navigate, startOrder, lock } = usePosStore()
   const [collapsed, setCollapsed] = useState(false)
   const [now, setNow] = useState(() => new Date())
@@ -63,6 +63,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <span className="border-l pl-4 text-xs text-slate-500">{now.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} · {now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
         </div>
         <div className="flex items-center gap-3">
+          {license.mode === 'trial' && <button className="rounded-lg bg-teal-50 px-2.5 py-2 text-xs font-semibold text-teal-800"
+            onClick={activate}>7-Day Full Trial · {license.daysLeft} days left</button>}
           <span className="flex items-center gap-2 rounded-lg border bg-slate-50 px-3 py-2 text-xs font-semibold"><UserRound size={15} /> {cashier?.name} <span className="capitalize text-slate-500">{cashier?.role}</span></span>
           {route !== 'floor' && <button className="primary h-9" onClick={() => startOrder('parcel')}><Plus size={17} /> New Takeaway <kbd className="rounded bg-white/20 px-1.5 py-0.5 text-[11px]">F1</kbd></button>}
         </div>

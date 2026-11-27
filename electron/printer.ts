@@ -96,3 +96,16 @@ export class Printer {
     } finally { if (!view.isDestroyed()) view.destroy() }
   }
 }
+
+export function zReportHtml(report: import('../src/types/pos').ZReport) {
+  const fmt = (amount: number) => report.currency + amount.toFixed(2)
+  return roll(80, [`<header><h2>${esc(report.restaurant)}</h2><h2>Z-Report</h2>
+${paragraph(report.day)}${paragraph('Closed by ' + report.actor)}</header><hr>
+${line('Orders', String(report.orderCount))}${line('Net sales', fmt(report.sales))}${line('Tax', fmt(report.tax))}
+${Object.entries(report.payments).map(([mode, amount]) => line(mode + ' net', fmt(amount))).join('')}<hr>
+${line('Opening float', fmt(report.opening))}${line('Cash sales', fmt(report.cashSales))}${line('Cash refunds', fmt(report.refunds))}
+${line('Expected cash', fmt(report.expected))}${line('Actual counted', fmt(report.actual))}
+<strong>${line('Over / short', fmt(report.variance))}</strong><hr>
+${[2000,500,200,100,50,20,10].map((value,i) => line(fmt(value), String(report.counts[i]))).join('')}
+${line('Coins', fmt(report.coins))}`])
+}

@@ -78,7 +78,19 @@ export interface ServexApi {
   merge(input: TableMerge): Promise<void>
   updateStatus(input: TableStatusUpdate): Promise<void>
   toggleItem(id: number): Promise<void>
-  closeDay(overridePin?: string): Promise<void>
+  startup(): Promise<StartupState>
+  setupLogo(): Promise<PickedMedia | null>
+  finishSetup(input: SetupInput): Promise<void>
+  restoreSetup(passphrase: string): Promise<boolean>
+  activateLicense(key: string): Promise<LicenseState>
+  analytics(range: DateRange): Promise<Analytics>
+  auditEntries(query: AuditQuery): Promise<AuditEntry[]>
+  exportAudit(query: AuditQuery): Promise<boolean>
+  getZReport(): Promise<ZState>
+  closeDay(input: CloseDayInput): Promise<PrintResult>
+  onLanChange(listener: () => void): () => void
+  lanStatus(): Promise<LanState>
+  configureLan(enabled: boolean): Promise<LanState>
   updateSettings(input: SettingsInput): Promise<void>
   pickLogo(): Promise<boolean>
   removeLogo(): Promise<void>
@@ -141,3 +153,23 @@ export interface KitchenTicket {
   id: number; order_id: number; status: 'preparing' | 'ready'; created_at: string
   reference: string; lines: { name: string; quantity: number; notes: string | null }[]
 }
+
+export interface LicenseState { machine: string; mode: 'trial' | 'active' | 'expired'; daysLeft: number }
+export interface StartupState { onboarding: boolean; license: LicenseState }
+export interface SetupInput {
+  name: string; phone: string; address: string; gstin: string; logo: string | null
+  preset: 'dinein' | 'garden' | 'lodging'; tax: number; upi: string; pin: string
+}
+export interface DateRange { from: string; to: string }
+export interface Analytics {
+  sales: number; count: number; average: number; tax: number; cgst: number; sgst: number
+  orders: Record<OrderType, number>; payments: Record<PaymentMode, number>
+  trend: { label: string; amount: number }[]
+  items: { name: string; qty: number; amount: number }[]
+}
+export interface AuditQuery extends DateRange { action?: string; before?: number }
+export interface AuditEntry { id: number; timestamp: string; actor: string; action: string; details: string | null }
+export interface CloseDayInput { opening: number; counts: number[]; coins: number; pin?: string; backupPassphrase?: string }
+export interface ZReport { day: string; actor: string; opening: number; cashSales: number; refunds: number; expected: number; actual: number; variance: number; counts: number[]; coins: number; currency: string; restaurant: string; payments: Analytics['payments']; sales: number; tax: number; orderCount: number }
+export interface ZState { day: string; cashSales: number; refunds: number; report: ZReport | null; legacyClosed: boolean }
+export interface LanState { enabled: boolean; url: string | null; pairing: string | null; error?: string }

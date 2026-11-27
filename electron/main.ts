@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, IpcMainInvokeEvent } from 'electron'
-import { createPublicKey, verify } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,7 +9,10 @@ import { Catalog, nameOf, pinDigest, validPin } from './catalog'
 import { CloudBackup, DeviceSecrets } from './cloud'
 import { MediaLibrary } from './media'
 import { FloorService, orderColumns } from './service'
-import { Printer, receiptHtml, ticketHtml, type ReceiptDocument } from './printer'
+import { Printer, receiptHtml, ticketHtml, zReportHtml, type ReceiptDocument } from './printer'
+import { LicenseManager } from './license'
+import { LocalServer } from './localServer'
+import { Reports, closedDay } from './reports'
 import type { Cashier, Category, FloorTable, MenuItem, Order, OrderItem, Settings, SettingsInput, Snapshot, Zone, ServexApi } from '../src/types/pos'
 
 const dev = !app.isPackaged && process.env.SERVEX_DEV === '1'
@@ -19,20 +22,6 @@ app.setAppUserModelId('com.servex.pos')
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=1536')
 let window: BrowserWindow | null = null
 let cashier: Cashier | null = null
-
-function activeLicense(value: string | null) {
-  const publicKey = process.env.SERVEX_LICENSE_PUBLIC_KEY
-  if (!value || !publicKey) return false
-  try {
-    const [payload, signature, extra] = value.split('.')
-    if (!payload || !signature || extra) return false
-    const key = createPublicKey(publicKey)
-    if (key.asymmetricKeyType !== 'ed25519' ||
-        !verify(null, Buffer.from(payload, 'ascii'), key, Buffer.from(signature, 'base64url'))) return false
-    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
-    return claims.plan === 'commercial' && Number.isFinite(claims.exp) && claims.exp * 1000 > Date.now()
-  } catch { return false }
-}
 
 function createWindow() {
   const icon = app.isPackaged ? path.join(process.resourcesPath, 'icon.ico') : path.join(app.getAppPath(), 'build/icon.ico')
@@ -52,10 +41,24 @@ function createWindow() {
   void window.loadURL(homePage)
 }
 
-function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cloud: CloudBackup, secrets: DeviceSecrets) {
+function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cloud: CloudBackup, secrets: DeviceSecrets, storage: string) {
   const catalog = new Catalog(db, media)
   const service = new FloorService(db)
   const printer = new Printer()
+  const reports = new Reports(db)
+  const keyFile = path.join(app.getAppPath(), 'build', 'license-public.pem')
+  const license = new LicenseManager(path.join(storage, 'license-trial.json'),
+    (!app.isPackaged && process.env.SERVEX_LICENSE_PUBLIC_KEY) || (fs.existsSync(keyFile) ? fs.readFileSync(keyFile, 'utf8') : undefined))
+  const licenseState = () => license.state(db.all<{ license_key: string | null }>('SELECT license_key FROM settings WHERE id=1')[0].license_key)
+  const needsSetup = () => db.all<{ onboarding_completed: number }>('SELECT onboarding_completed FROM settings WHERE id=1')[0].onboarding_completed === 0
+  const lan = new LocalServer(db, service, () => !needsSetup() && licenseState().mode !== 'expired',
+    () => window?.webContents.send('pos:lanChanged'))
+  const persistedLan = db.all<{ lan_enabled: number; lan_actor: number | null }>('SELECT lan_enabled,lan_actor FROM settings WHERE id=1')[0]
+  if (persistedLan.lan_enabled && persistedLan.lan_actor && !needsSetup() && licenseState().mode !== 'expired') void lan.start(persistedLan.lan_actor)
+  app.once('will-quit', () => lan.stop())
+  const lanUpdates = new Set<keyof ServexApi>(['createOrder','addOrderItems','clearUnsent','editBill','completePayment',
+    'saveLayout','transfer','merge','updateStatus','toggleItem','saveCategory','moveCategory','saveMenuItem',
+    'deleteMenuItem','importMenuCsv','saveZone','deleteZone','saveLocations','deleteLocation','closeDay','prebill','sendKot'])
   const printing = new Set<number>()
   function ensureIdle(...ids: number[]) {
     if (ids.some(id => printing.has(id))) throw new Error('Wait for the order’s print dialog to finish.')
@@ -71,7 +74,10 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
       if (access !== 'public' && !cashier) throw new Error('Sign in to continue.')
       if (access === 'manager' && cashier?.role === 'cashier') throw new Error('Manager access is required.')
       if (access === 'admin' && cashier?.role !== 'admin') throw new Error('Administrator access is required.')
-      return handle(...args)
+      if (access !== 'public' && licenseState().mode === 'expired') throw new Error('Activate ServeX to continue.')
+      const result = handle(...args)
+      if (lanUpdates.has(name)) return Promise.resolve(result).then(value => { lan.changed(); return value })
+      return result
     })
   }
   const settings = (): Settings => {
@@ -79,12 +85,13 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
       `SELECT restaurant_name, tagline, logo_path, address, phone, gstin, currency_symbol, tax_rate,
         tax_inclusive, auto_cleaning, receipt_width, print_preview, printer_name, upi_id, receipt_footer, cloud_sync_enabled, cloud_endpoint, license_key FROM settings`,
     )[0]
-    return { ...config, licenseConfigured: Boolean(license_key), licenseActive: activeLicense(license_key) }
+    return { ...config, licenseConfigured: Boolean(license_key), licenseActive: Boolean(license_key && license.accepts(license_key)) }
   }
-  const localDay = () => db.all<{ date: string }>("SELECT date('now','localtime') AS date")[0].date
+  const localDay = () => reports.day()
   let nextSignIn = 0
   let nextOverride = 0
   register('signIn', 'public', (pin: string) => {
+    if (needsSetup() || licenseState().mode === 'expired') throw new Error('Finish setup or activate ServeX before signing in.')
     if (Date.now() < nextSignIn) throw new Error('Wait a moment before trying again.')
     nextSignIn = Date.now() + 750
     if (typeof pin !== 'string' || !/^\d{4,12}$/.test(pin)) return null
@@ -100,11 +107,11 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
       tables: db.all<FloorTable>('SELECT * FROM tables ORDER BY id'),
       categories: db.all<Category>('SELECT * FROM categories ORDER BY sort_order, id'),
       menu: db.all<MenuItem>('SELECT * FROM menu_items WHERE archived = 0 ORDER BY id'),
-      orders: db.all<Order>(`SELECT ${orderColumns} FROM orders WHERE status IN ('open','billed') OR date(closed_at,'localtime') = ? ORDER BY id DESC`, [localDay()]),
+      orders: db.all<Order>(`SELECT ${orderColumns} FROM orders WHERE status IN ('open','billed') ORDER BY id DESC`),
       orderItems: db.all<OrderItem>("SELECT i.* FROM order_items i JOIN orders o ON o.id = i.order_id WHERE o.status IN ('open','billed') ORDER BY i.id"),
       kitchen: service.kitchen(),
       businessDate: localDay(),
-      lastClose: db.all<{ created_at: string }>("SELECT created_at FROM audit_logs WHERE action = 'z-close' AND details = ? ORDER BY id DESC LIMIT 1", [localDay()])[0]?.created_at ?? null,
+      lastClose: db.all<{ created_at: string }>(`SELECT created_at FROM audit_logs WHERE ${closedDay} AND details = ? ORDER BY id DESC LIMIT 1`, [localDay()])[0]?.created_at ?? null,
     }
   })
   register('saveLayout', 'manager', updates => service.saveLayout(updates), 'tables')
@@ -198,17 +205,83 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
   register('printPreview', 'staff', id => printer.preview(id, cashier!.id))
 
   register('toggleItem', 'manager', (id: number) => db.write('UPDATE menu_items SET is_available = 1 - is_available WHERE id = ? AND archived = 0', [id]))
-  register('closeDay', 'staff', (overridePin?: string) => {
-    if (cashier?.role === 'cashier') requireManagerPin(overridePin)
-    const date = localDay()
-    if (db.all("SELECT id FROM orders WHERE status IN ('open','billed') LIMIT 1").length) throw new Error('Settle open orders before closing the day.')
-    if (db.all("SELECT id FROM audit_logs WHERE action = 'z-close' AND details = ?", [date]).length) throw new Error('Today has already been closed.')
+  register('startup', 'public', () => ({ onboarding: needsSetup(), license: licenseState() }))
+  register('setupLogo', 'public', () => {
+    if (!needsSetup()) throw new Error('Initial setup is already complete.')
+    return media.pick(window!, needsSetup)
+  })
+  register('finishSetup', 'public', input => {
+    if (!needsSetup()) throw new Error('Initial setup is already complete.')
+    const name = nameOf(input.name, 'restaurant name')
+    const pin = pinDigest(db, validPin(input.pin))
+    if (!['dinein','garden','lodging'].includes(input.preset) || !Number.isFinite(input.tax) || input.tax < 0 || input.tax > 100 ||
+      typeof input.upi !== 'string' || !/^[\w.+-]{1,120}@[\w.-]{1,64}$/.test(input.upi) ||
+      (input.logo !== null && !media.read(input.logo))) throw new Error('Check the venue preset, tax rate, UPI ID, and logo.')
+    const trim = (value: string) => {
+      if (typeof value !== 'string' || value.length > 250) throw new Error('A restaurant field exceeds 250 characters.')
+      return value.trim() || null
+    }
     db.transaction(sql => {
-      sql.run("INSERT INTO audit_logs (user_id, action, entity_type, details) VALUES (?, 'z-close', 'business-day', ?)", [cashier!.id, date])
-      if (cashier?.role === 'cashier') {
-        sql.run("INSERT INTO audit_logs (user_id, action, entity_type, details) VALUES (?, 'manager-override', 'business-day', ?)", [cashier.id, date])
-      }
+      sql.run(`UPDATE settings SET restaurant_name=?, phone=?, address=?, gstin=?, logo_path=?, tax_rate=?,
+        upi_id=?, onboarding_completed=1, tagline=NULL WHERE id=1`,
+      [name, trim(input.phone), trim(input.address), trim(input.gstin), input.logo, input.tax, input.upi])
+      sql.run('UPDATE menu_items SET tax_slab=?', [input.tax])
+      sql.run("UPDATE users SET pin=? WHERE id=(SELECT id FROM users WHERE role='admin' AND is_active=1 ORDER BY id LIMIT 1)", [pin])
+      if (input.preset !== 'garden') sql.run("DELETE FROM zones WHERE name='Garden Lawn'")
+      if (input.preset !== 'lodging') sql.run("DELETE FROM zones WHERE name='Luxury Rooms'")
     })
+  })
+  register('activateLicense', 'public', key => {
+    if (!license.accepts(key)) throw new Error('Activation key is invalid for this machine or the issuer key is missing.')
+    db.transaction(sql => {
+      sql.run('UPDATE settings SET license_key=? WHERE id=1', [key.trim()])
+      sql.run("INSERT INTO audit_logs (user_id,action,entity_type) VALUES (?,'LICENSE_ACTIVATED','settings')", [cashier?.id ?? null])
+    })
+    return licenseState()
+  })
+  register('analytics', 'staff', range => reports.analytics(range))
+  register('auditEntries', 'manager', query => reports.audit(query))
+  register('getZReport', 'staff', () => reports.zState())
+  register('closeDay', 'staff', async input => {
+    const current = reports.zState()
+    if (!current.report && cashier?.role === 'cashier') requireManagerPin(input.pin)
+    const actor = cashier!
+    const destination = (report: NonNullable<typeof current.report>) => {
+      const fingerprint = createHash('sha256').update(JSON.stringify(report)).digest('hex').slice(0, 16)
+      return path.join(storage, 'z-backups', `ServeX_Z_${report.day}_${fingerprint}.svxbak`)
+    }
+    let secret: string | undefined
+    if (!current.report || !fs.existsSync(destination(current.report))) {
+      try { secret = secrets.localKey() }
+      catch {
+        if (!input.backupPassphrase) throw new Error('OS credential storage is unavailable. Enter a backup passphrase to continue.')
+        validatePassphrase(input.backupPassphrase)
+        secret = input.backupPassphrase
+      }
+    }
+    const report = current.report ?? reports.close(input, actor)
+    let error: string | undefined
+    try { if (secret) atomicWrite(destination(report), backup.archive(secret)) }
+    catch { error = 'Day closed. The encrypted snapshot failed; retry from Z-Close to create it.' }
+    const result = await printer.submit(zReportHtml(report), settings(), actor.id)
+    return { ...result, error: [error, result.error].filter(Boolean).join(' ') || undefined }
+  })
+  register('lanStatus', 'admin', () => lan.state())
+  register('configureLan', 'admin', async enabled => {
+    if (typeof enabled !== 'boolean') throw new Error('Choose a valid Mobile Waiter Sync setting.')
+    const actor = cashier!
+    if (!enabled) {
+      lan.stop()
+      db.write('UPDATE settings SET lan_enabled=0,lan_actor=NULL WHERE id=1')
+      return lan.state()
+    }
+    const state = await lan.start(actor.id)
+    if (cashier !== actor) { lan.stop(); throw new Error('Sign in again to enable Mobile Waiter Sync.') }
+    if (state.enabled) {
+      try { db.write('UPDATE settings SET lan_enabled=1,lan_actor=? WHERE id=1', [actor.id]) }
+      catch (error) { lan.stop(); throw error }
+    }
+    return state
   })
   register('updateSettings', 'manager', (input: SettingsInput) => {
     const clean = (value: string | null) => {
@@ -224,7 +297,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
       throw new Error('Administrator access is required for security and license settings.')
     }
     const digest = input.managerPin === undefined ? null : pinDigest(db, validPin(input.managerPin))
-    if (input.licenseKey !== undefined && (typeof input.licenseKey !== 'string' || input.licenseKey.length > 2048)) throw new Error('Enter a valid license key.')
+    if (input.licenseKey !== undefined && !license.accepts(input.licenseKey)) throw new Error('Activation key is invalid for this machine.')
     if (input.upi_id !== undefined && (typeof input.upi_id !== 'string' || !/^[\w.+-]{1,120}@[\w.-]{1,64}$/.test(input.upi_id))) throw new Error('Enter a valid UPI ID.')
     if (input.receipt_width !== undefined && ![58, 80].includes(input.receipt_width)) throw new Error('Choose a 58 mm or 80 mm roll.')
     if (input.print_preview !== undefined && ![0, 1].includes(input.print_preview)) throw new Error('Choose a valid print mode.')
@@ -280,6 +353,18 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     atomicWrite(file, bytes())
     return true
   }
+  register('exportAudit', 'manager', query => saveFile(() => Buffer.from(reports.csv(query)),
+    `ServeX_Audit_${query.from}_${query.to}.csv`, csvFilter))
+  register('restoreSetup', 'public', async passphrase => {
+    if (!needsSetup()) throw new Error('Initial setup is already complete.')
+    validatePassphrase(passphrase)
+    const result = await dialog.showOpenDialog(window!, { properties: ['openFile'], filters: backupFilter })
+    if (result.canceled || !needsSetup()) return false
+    backup.restore(result.filePaths[0], passphrase, undefined, passphrase)
+    db.write('UPDATE settings SET onboarding_completed=1,lan_enabled=0,lan_actor=NULL WHERE id=1')
+    cloud.invalidate()
+    return true
+  })
   register('importMenuCsv', 'manager', async () => {
     const actor = cashier
     const result = await dialog.showOpenDialog(window!, { properties: ['openFile'], filters: csvFilter })
@@ -311,6 +396,8 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     if (printing.size) throw new Error('Wait for the active print dialog before restoring a backup.')
     const previous = db.all<{ pin: string }>('SELECT pin FROM users WHERE id = ?', [actor.id])[0].pin
     backup.restore(result.filePaths[0], passphrase, localKey, localKey ?? passphrase)
+    lan.stop()
+    db.write('UPDATE settings SET lan_enabled=0,lan_actor=NULL WHERE id=1')
     cloud.invalidate()
     printer.clear()
     const restored = db.all<Cashier>(
@@ -334,7 +421,7 @@ else {
     const backup = new BackupEngine(db, media, path.join(storage, 'auto-backups'))
     const secrets = new DeviceSecrets(path.join(storage, 'device-secrets'))
     const cloud = new CloudBackup(db, backup, secrets)
-    handlers(db, media, backup, cloud, secrets)
+    handlers(db, media, backup, cloud, secrets, storage)
     const scheduled = () => void cloud.sync(true).catch(() => console.warn('Scheduled ServeX cloud backup did not complete.'))
     scheduled()
     const timer = setInterval(scheduled, 15 * 60 * 1000)

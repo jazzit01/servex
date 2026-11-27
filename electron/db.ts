@@ -76,6 +76,17 @@ CREATE TABLE kitchen_tickets (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );`
 
+const v5Schema = `
+ALTER TABLE settings ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE settings ADD COLUMN lan_enabled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE settings ADD COLUMN lan_actor INTEGER;
+CREATE TABLE z_reports (day TEXT PRIMARY KEY, actor INTEGER NOT NULL REFERENCES users(id),
+  closed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, content TEXT NOT NULL);
+CREATE TABLE lan_requests (request_id TEXT PRIMARY KEY, payload TEXT NOT NULL, order_id INTEGER NOT NULL);
+CREATE TRIGGER z_reports_no_update BEFORE UPDATE ON z_reports BEGIN SELECT RAISE(ABORT, 'Z-reports are immutable'); END;
+CREATE TRIGGER z_reports_no_delete BEFORE DELETE ON z_reports BEGIN SELECT RAISE(ABORT, 'Z-reports are immutable'); END;
+`
+
 export function atomicWrite(file: string, bytes: Uint8Array) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const temp = path.join(path.dirname(file), `.${randomUUID()}.tmp`)
@@ -94,8 +105,9 @@ export function hashPin(pin: string, salt: string) {
 function migrate(db: Database) {
   db.run('PRAGMA foreign_keys = ON')
   const version = Number(db.exec('PRAGMA user_version')[0].values[0][0])
-  if (version > 4) throw new Error('This database requires a newer ServeX version.')
+  if (version > 5) throw new Error('This database requires a newer ServeX version.')
   db.run('BEGIN')
+  const fresh = version === 0 && !db.exec("SELECT name FROM sqlite_master WHERE name = 'settings' AND type = 'table'").length
   if (version < 1) db.run(schema + 'PRAGMA user_version = 1;')
   if (!db.exec('SELECT id FROM settings').length) {
     db.run(`INSERT INTO settings (id, restaurant_name, tagline) VALUES (1, 'ServeX Demo Kitchen', 'Powered by ServeX POS');
@@ -168,6 +180,11 @@ function migrate(db: Database) {
     WHERE o.status IN ('open','billed') AND i.kot_printed = 1 GROUP BY o.id;
     PRAGMA user_version = 4;
   `)
+  if (version < 5) {
+    db.run(v5Schema)
+    if (fresh) db.run('UPDATE settings SET onboarding_completed = 0 WHERE id = 1')
+    db.run('PRAGMA user_version = 5')
+  }
   db.run('COMMIT')
 }
 
@@ -243,8 +260,10 @@ export class PosDatabase {
         if (version >= 2) reference.run(v2Columns)
         if (version >= 3) reference.run(v3Columns)
         if (version >= 4) reference.run(v4Schema)
+        if (version >= 5) reference.run(v5Schema)
         const tables = reference.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")[0].values.flat()
-        if (candidate.exec("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'view')").length ||
+        const codeObjects = "SELECT name, sql FROM sqlite_master WHERE type IN ('trigger', 'view') ORDER BY name"
+        if (JSON.stringify(candidate.exec(codeObjects)) !== JSON.stringify(reference.exec(codeObjects)) ||
             tables.some(table => ['table_info', 'foreign_key_list'].some(pragma =>
               JSON.stringify(candidate.exec(`PRAGMA ${pragma}(${table})`)) !== JSON.stringify(reference.exec(`PRAGMA ${pragma}(${table})`))))) {
           throw new Error('The backup does not match the ServeX database schema.')
