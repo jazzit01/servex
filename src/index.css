@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { @apply border-slate-200; }
+  body { @apply bg-slate-50 text-slate-900 antialiased tabular-nums; font-family: "Segoe UI", system-ui, sans-serif; }
+  h1 { @apply text-[28px] font-bold tracking-tight; }
+  h2 { @apply text-base font-bold; }
+  button:focus-visible, input:focus-visible, select:focus-visible { @apply outline outline-2 outline-offset-2 outline-teal-600; }
+  button:disabled { @apply cursor-not-allowed opacity-50; }
+}
+@layer components {
+  .nav { @apply flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium; }
+  .primary { @apply inline-flex items-center justify-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700; }
+  .secondary { @apply inline-flex items-center justify-center gap-2 rounded-lg border bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50; }
+  .panel { @apply rounded-xl border border-slate-200 bg-white shadow-sm; }
+  .workspace { @apply mx-auto max-w-[1500px] space-y-5; }
+  .subtitle { @apply mt-1 text-sm text-slate-500; }
+  .field { @apply w-full rounded-lg border bg-white px-3 py-2 text-sm; }
+  .caption { @apply text-xs font-medium text-slate-500; }
+}

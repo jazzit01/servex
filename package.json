@@ -1,0 +1,56 @@
+{
+  "name": "servex",
+  "version": "1.0.0",
+  "description": "Offline restaurant and lodging point of sale",
+  "author": "ServeX",
+  "productName": "ServeX POS",
+  "private": true,
+  "main": "dist-electron/electron/main.js",
+  "scripts": {
+    "dev": "cross-env NODE_OPTIONS=--max-old-space-size=1536 npm run dev:desktop",
+    "dev:desktop": "tsc -p tsconfig.electron.json && concurrently -k -s first -n vite,electron \"vite --host 127.0.0.1 --strictPort\" \"wait-on http-get://127.0.0.1:5173 && cross-env SERVEX_DEV=1 electron .\"",
+    "build": "tsc --noEmit && tsc -p tsconfig.electron.json && vite build",
+    "build:win": "npm run build && electron-builder --win nsis portable --x64"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sql.js": "^1.13.0",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/sql.js": "^1.4.9",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^39.8.5",
+    "electron-builder": "^26.0.12",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vite": "^6.4.1",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.servex.pos",
+    "directories": {"output": "release"},
+    "files": ["dist/**", "dist-electron/**", "package.json"],
+    "extraResources": [{"from": "build/icon.ico", "to": "icon.ico"}],
+    "asarUnpack": ["node_modules/sql.js/dist/*.wasm"],
+    "win": {"icon": "build/icon.ico", "target": ["nsis", "portable"]},
+    "nsis": {
+      "artifactName": "ServeX-Setup.exe",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "createDesktopShortcut": true,
+      "shortcutName": "ServeX POS"
+    },
+    "portable": {"artifactName": "ServeX-Portable.exe"}
+  }
+}
