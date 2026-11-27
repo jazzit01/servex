@@ -1,15 +1,15 @@
 import { useState } from 'react'
 import { ArrowLeft, ArrowRight, Building2, Check, ImagePlus, Upload } from 'lucide-react'
 import { Field, Modal } from '../ManagementControls'
-import type { PickedMedia, SetupInput } from '../../types/pos'
+import type { PickedMedia, SetupInput, SetupProfile } from '../../types/pos'
 
 const presets = { dinein: 'Dine-In Only', garden: 'Restaurant + Garden', lodging: 'Restaurant + Lodging Rooms' } as const
 const labels = ['Brand Identity', 'Floor & Tax Setup', 'Ready to Sell']
 
-export default function SetupWizard({ complete }: { complete: () => Promise<void> }) {
+export default function SetupWizard({ complete, cancel, profile }: { complete: () => Promise<void>; cancel: () => void; profile?: SetupProfile }) {
   const [step, setStep] = useState(0)
-  const [input, setInput] = useState<SetupInput>({ name: '', phone: '', address: '', gstin: '', logo: null, preset: 'dinein', tax: 5, upi: 'servex@upi', pin: '' })
-  const [logo, setLogo] = useState<PickedMedia | null>(null)
+  const [input, setInput] = useState<SetupInput>(profile?.input ?? { name: '', phone: '', address: '', gstin: '', logo: null, preset: 'dinein', tax: 5, upi: 'servex@upi', pin: '' })
+  const [logo, setLogo] = useState<PickedMedia | null | undefined>(profile?.logo ?? undefined)
   const [restoring, restore] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -20,7 +20,8 @@ export default function SetupWizard({ complete }: { complete: () => Promise<void
     finally { setBusy(false) }
   }
   return <div className="grid h-screen place-items-center bg-slate-50">
-    <Modal wide title="Set up ServeX POS" onClose={() => { if (restoring && !busy) { restore(false); setError('') } }}>
+    <Modal wide title="Set up ServeX POS" dismissDisabled={busy} dismissLabel={restoring ? 'Back' : 'Cancel'}
+      onClose={() => { if (restoring) { restore(false); setError('') } else cancel() }}>
       <ol className="mb-5 grid grid-cols-3 gap-2" aria-label="Setup steps">{labels.map((label, index) => <li key={label} aria-current={step === index ? 'step' : undefined}
         className={`flex items-center gap-2 rounded-lg p-2 text-xs font-semibold ${step === index ? 'bg-teal-50 text-teal-800' : 'bg-slate-50 text-slate-500'}`}>
         {step > index ? <Check size={15} /> : <span>{index + 1}</span>}{label}</li>)}</ol>
@@ -28,7 +29,7 @@ export default function SetupWizard({ complete }: { complete: () => Promise<void
         event.preventDefault()
         if (busy) return
         if (step < 2) { setError(''); setStep(step + 1) }
-        else void work(async () => { await window.servexApi.finishSetup({ ...input, logo: logo?.name ?? null }); await complete() })
+        else void work(async () => { await window.servexApi.finishSetup({ ...input, logo: logo === undefined ? input.logo : logo?.name ?? null }); await complete() })
       }}>
         {step === 0 && <>
           <h2>Brand Identity</h2>
@@ -48,20 +49,20 @@ export default function SetupWizard({ complete }: { complete: () => Promise<void
         </>}
         {step === 1 && <>
           <h2>Floor &amp; Tax Setup</h2>
-          <div className="grid grid-cols-3 gap-2">{Object.entries(presets).map(([key, label]) => <button key={key} type="button"
+          {profile ? <p className="subtitle">Your existing zones, tables, menu, and sales history stay in place.</p> : <div className="grid grid-cols-3 gap-2">{Object.entries(presets).map(([key, label]) => <button key={key} type="button"
             className={input.preset === key ? 'primary' : 'secondary'} aria-pressed={input.preset === key} onClick={() => change('preset', key as SetupInput['preset'])}>
-            <Building2 size={16} />{label}</button>)}</div>
+            <Building2 size={16} />{label}</button>)}</div>}
           <div className="grid grid-cols-3 gap-2">
             <Field label="Tax rate (%)"><input className="field" type="number" required min={0} max={100} step=".01" value={input.tax} onChange={e => change('tax', Number(e.target.value))} /></Field>
             <Field label="UPI ID"><input className="field" required maxLength={185} value={input.upi} onChange={e => change('upi', e.target.value)} /></Field>
-            <Field label="New admin PIN"><input className="field" type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]{4}"
-              maxLength={4} required value={input.pin} onChange={e => change('pin', e.target.value)} /></Field>
+            <Field label={profile ? "New admin PIN (optional)" : "New admin PIN"}><input className="field" type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]{4}"
+              maxLength={4} required={!profile} value={input.pin} onChange={e => change('pin', e.target.value)} /></Field>
           </div>
         </>}
         {step === 2 && <section className="rounded-xl border bg-teal-50 p-5">
           <h2>Ready to Sell</h2><div className="mt-3 text-xl font-bold">{input.name}</div>
-          <p className="subtitle">{presets[input.preset]} · {input.tax}% tax · {input.upi}</p>
-          <p className="mt-2 text-sm text-teal-900">Sign in with your new admin PIN to open the till.</p>
+          <p className="subtitle">{profile ? 'Existing floor layout' : presets[input.preset]} · {input.tax}% tax · {input.upi}</p>
+          <p className="mt-2 text-sm text-teal-900">Sign in with your administrator PIN to open the till.</p>
         </section>}
         <div className="flex flex-wrap items-center gap-2 border-t pt-3">
           {step > 0 && <button type="button" className="secondary" disabled={busy} onClick={() => { setError(''); setStep(step - 1) }}><ArrowLeft size={16} /> Back</button>}
@@ -73,9 +74,8 @@ export default function SetupWizard({ complete }: { complete: () => Promise<void
         const secret = String(new FormData(event.currentTarget).get('secret'))
         void work(async () => { if (await window.servexApi.restoreSetup(secret)) await complete() })
       }}>
-        <h2>Restore a migration backup</h2><p className="subtitle">Use the passphrase from the original full backup export.</p>
-        <Field label="Backup passphrase"><input className="field" name="secret" type="password" autoComplete="off" minLength={12} maxLength={256} required /></Field>
-        <button type="button" className="secondary mr-2" disabled={busy} onClick={() => { setError(''); restore(false) }}>Back to setup</button>
+        <h2>Restore a migration backup</h2><p className="subtitle">Enter the full backup’s passphrase. {profile && 'Leave it blank only for a backup encrypted on this PC.'}</p>
+        <Field label="Backup passphrase"><input className="field" name="secret" type="password" autoComplete="off" minLength={12} maxLength={256} required={!profile} /></Field>
         <button className="primary" disabled={busy}>Choose Backup</button>
       </form>}
       {error && <p role="alert" className="mt-3 rounded bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}

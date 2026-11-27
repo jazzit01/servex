@@ -98,7 +98,7 @@ export default function CheckoutModal({ order, lines, data, label, initialSplit,
 
   const menu = data.menu.filter(item => item.is_available && data.categories.some(category => category.id === item.category_id && category.is_active))
   return <>
-    <Modal wide title={`Checkout · ${label}`} onClose={() => {
+    <Modal wide dismissLabel="Back" dismissDisabled={busy} title={`Checkout · ${label}`} onClose={() => {
       if (!busy && (!dirty || window.confirm('Discard unsaved bill edits?'))) onClose()
     }}>
       <div className="grid grid-cols-2 gap-5">

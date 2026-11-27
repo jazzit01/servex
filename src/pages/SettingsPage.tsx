@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Building2, CloudUpload, Eye, EyeOff, ImagePlus, Layers, ShieldCheck, Trash2, Users } from 'lucide-react'
+import { ArrowLeft, Building2, CloudUpload, Eye, EyeOff, ImagePlus, Layers, ShieldCheck, Trash2, Users } from 'lucide-react'
 import { Field, Switch } from '../components/ManagementControls'
 import MobileWaiterSettings from '../components/settings/MobileWaiterSettings'
 import BackupSettings from '../components/settings/BackupSettings'
@@ -133,6 +133,7 @@ export default function SettingsPage() {
       {allowed.map(({ id, label, icon: Icon }) => <button className={`secondary ${tab === id ? 'border-teal-300 bg-teal-50 text-teal-800' : ''}`}
         key={id} aria-pressed={tab === id} onClick={() => setTab(id)}><Icon size={16} />{label}</button>)}
     </nav>
+    {tab !== 'profile' && <button className="secondary h-10" onClick={() => setTab('profile')}><ArrowLeft size={16} /> Back to Restaurant Settings</button>}
     {tab === 'profile' || cashier?.role !== 'admin' ? <ProfileSettings /> :
       tab === 'staff' ? <StaffSettings /> : tab === 'floor' ? <FloorSettings /> : tab === 'mobile' ? <MobileWaiterSettings /> : <BackupSettings />}
   </div>

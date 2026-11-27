@@ -58,7 +58,7 @@ export default function StaffSettings() {
         </select></Field>
         <Field label={selected ? 'New PIN (optional)' : 'PIN'}><input className="field" name="pin" type="password" inputMode="numeric" autoComplete="new-password" maxLength={4} pattern="[0-9]{4}" required={!selected} /></Field>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="active" defaultChecked={!selected || Boolean(selected.is_active)} /> Active account</label>
-        <div className="flex justify-end gap-2"><button type="button" className="secondary" disabled={busy} onClick={() => setEditing(null)}>Cancel</button><button className="primary" disabled={busy}>Save staff</button></div>
+        <div className="flex justify-end gap-2"><button className="primary" disabled={busy}>Save staff</button></div>
       </form>
     </Modal>}
   </section>

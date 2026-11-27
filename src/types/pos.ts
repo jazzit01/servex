@@ -57,7 +57,9 @@ export interface OrderInput {
   type: OrderType; tableId: number | null; items: CartItem[]; guestName?: string; guestCount?: number; phone?: string
 }
 export interface ServexApi {
-  signIn(pin: string): Promise<Cashier | null>
+  activeStaff(): Promise<Cashier[]>
+  authorizeSetup(pin: string): Promise<SetupProfile>
+  signIn(pin: string, staffId?: number): Promise<Cashier | null>
   lock(): Promise<void>
   snapshot(): Promise<Snapshot>
   createOrder(order: OrderInput): Promise<number>
@@ -156,6 +158,7 @@ export interface KitchenTicket {
 
 export interface LicenseState { machine: string; mode: 'trial' | 'active' | 'expired'; daysLeft: number }
 export interface StartupState { onboarding: boolean; license: LicenseState }
+export interface SetupProfile { input: SetupInput; logo: PickedMedia | null }
 export interface SetupInput {
   name: string; phone: string; address: string; gstin: string; logo: string | null
   preset: 'dinein' | 'garden' | 'lodging'; tax: number; upi: string; pin: string

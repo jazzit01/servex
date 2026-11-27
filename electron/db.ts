@@ -1,3 +1,4 @@
+import { foodReferenceForName } from '../src/types/foodLibrary'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomBytes, randomUUID, scryptSync } from 'node:crypto'
@@ -105,7 +106,7 @@ export function hashPin(pin: string, salt: string) {
 function migrate(db: Database) {
   db.run('PRAGMA foreign_keys = ON')
   const version = Number(db.exec('PRAGMA user_version')[0].values[0][0])
-  if (version > 5) throw new Error('This database requires a newer ServeX version.')
+  if (version > 6) throw new Error('This database requires a newer ServeX version.')
   db.run('BEGIN')
   const fresh = version === 0 && !db.exec("SELECT name FROM sqlite_master WHERE name = 'settings' AND type = 'table'").length
   if (version < 1) db.run(schema + 'PRAGMA user_version = 1;')
@@ -132,7 +133,7 @@ function migrate(db: Database) {
       db.run('INSERT INTO categories (name, sort_order) VALUES (?, ?)', [name, index])
       const id = db.exec('SELECT last_insert_rowid()')[0].values[0][0]
       for (const [item, price, veg] of items) {
-        db.run('INSERT INTO menu_items (category_id, name, price, is_veg) VALUES (?, ?, ?, ?)', [id, item, price, veg])
+        db.run('INSERT INTO menu_items (category_id, name, price, is_veg, image_path) VALUES (?, ?, ?, ?, ?)', [id, item, price, veg, foodReferenceForName(String(item))])
       }
     })
   }
@@ -184,6 +185,15 @@ function migrate(db: Database) {
     db.run(v5Schema)
     if (fresh) db.run('UPDATE settings SET onboarding_completed = 0 WHERE id = 1')
     db.run('PRAGMA user_version = 5')
+  }
+  if (version < 6) {
+    const originalSeed = ['Paneer Tikka', 'Chicken Tikka', 'Masala Papad', 'Dal Makhani', 'Butter Chicken',
+      'Veg Pulao', 'Masala Chai', 'Fresh Lime Soda', 'Mango Lassi']
+    originalSeed.forEach((name, index) => db.run(
+      'UPDATE menu_items SET image_path=? WHERE id=? AND name=? AND image_path IS NULL AND archived=0',
+      [foodReferenceForName(name), index + 1, name],
+    ))
+    db.run('PRAGMA user_version = 6')
   }
   db.run('COMMIT')
 }

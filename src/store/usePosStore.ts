@@ -20,7 +20,7 @@ interface PosState {
   resumeOrder(order: Order, checkout?: boolean): void
   notify(message: string, error?: boolean): void
   refresh(): Promise<void>
-  signIn(pin: string): Promise<boolean>
+  signIn(pin: string, staffId?: number): Promise<boolean>
   lock(): Promise<void>
 }
 let toastTimer: ReturnType<typeof setTimeout>
@@ -48,8 +48,8 @@ export const usePosStore = create<PosState>((set, get) => ({
     const data = await window.servexApi.snapshot()
     set(state => ({ data, cashier: state.cashier ? data.actor : null }))
   },
-  signIn: async pin => {
-    const cashier = await window.servexApi.signIn(pin)
+  signIn: async (pin, staffId) => {
+    const cashier = await window.servexApi.signIn(pin, staffId)
     if (!cashier) return false
     await get().refresh()
     set({ cashier, route: 'floor', orderId: null, tableId: null, orderType: 'parcel', openCheckout: false })

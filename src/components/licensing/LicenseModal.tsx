@@ -10,7 +10,7 @@ export default function LicenseModal({ state, close, activated }: {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
-  return <Modal compact title="Activate ServeX" onClose={() => { if (!busy && state.mode !== 'expired') close() }}>
+  return <Modal compact title="Activate ServeX" onClose={close} dismissDisabled={busy}>
     <form className="space-y-4" onSubmit={async event => {
       event.preventDefault(); setBusy(true); setError('')
       try { activated(await window.servexApi.activateLicense(key)); setKey('') }

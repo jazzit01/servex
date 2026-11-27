@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { BarChart3, CalendarDays, Download, ReceiptText, ShieldCheck } from 'lucide-react'
-import { Field } from '../components/ManagementControls'
+import { ArrowLeft, BarChart3, CalendarDays, Download, ReceiptText, ShieldCheck } from 'lucide-react'
+import { Field, Modal } from '../components/ManagementControls'
 import { publishPrint } from '../components/billing/PrintPreview'
 import { runAction, usePosStore } from '../store/usePosStore'
 import type { Analytics, AuditEntry, DateRange, PrintResult, ZState } from '../types/pos'
@@ -65,12 +65,12 @@ function ZClose({ z, reload, money }: { z: ZState; reload: () => Promise<void>; 
   const [passphrase, setPassphrase] = useState('')
   const [needsPassphrase, setNeedsPassphrase] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [confirmClose, setConfirmClose] = useState(false)
   const counted = counts.reduce((sum, count, i) => sum + Number(count) * denominations[i] * 100, Math.round(Number(coins) * 100)) / 100
   const expected = (Math.round(Number(opening) * 100) + Math.round(z.cashSales * 100) - Math.round(z.refunds * 100)) / 100
   const variance = z.report?.variance ?? Math.round((counted - expected) * 100) / 100
   const requiresPin = !z.report && cashier?.role === 'cashier'
-  return <form onSubmit={async event => {
-    event.preventDefault()
+  async function submitClose() {
     setBusy(true)
     let result: PrintResult | undefined
     const ok = await runAction(async () => {
@@ -78,9 +78,14 @@ function ZClose({ z, reload, money }: { z: ZState; reload: () => Promise<void>; 
         pin: pin || undefined, backupPassphrase: passphrase || undefined })
       await reload()
     }, z.report ? 'Saved Z-report prepared.' : 'Day closed.')
-    setPin(''); setPassphrase(''); setBusy(false)
+    setPin(''); setPassphrase(''); setBusy(false); setConfirmClose(false)
     if (ok && result) { setNeedsPassphrase(false); publishPrint(result) }
     else if (usePosStore.getState().toast?.message.includes('Enter a backup passphrase')) setNeedsPassphrase(true)
+  }
+  return <><form onSubmit={event => {
+    event.preventDefault()
+    if (z.report) void submitClose()
+    else setConfirmClose(true)
   }} className="grid grid-cols-2 items-start gap-4">
     <section className="panel space-y-4 p-5"><h2>Cash Reconciliation · {z.day}</h2>
       <Field label="Opening float"><input className="field" type="number" min={0} step="0.01" disabled={Boolean(z.report) || z.legacyClosed}
@@ -112,6 +117,11 @@ function ZClose({ z, reload, money }: { z: ZState; reload: () => Promise<void>; 
       <p className="text-xs text-slate-500">Settle open orders before closing. ServeX saves an encrypted snapshot after close.</p>
     </section>
   </form>
+  {confirmClose && <Modal compact title="Confirm Z-Close" onClose={() => setConfirmClose(false)} dismissDisabled={busy}>
+    <p className="mb-3 text-sm text-slate-600">Close {z.day} with {money(counted)} counted and a {money(variance)} variance? Closing saves the reconciliation and stops new orders for this day.</p>
+    <button className="primary" disabled={busy} onClick={() => void submitClose()}>Confirm and Print Z-Report</button>
+  </Modal>}
+  </>
 }
 
 export default function ReportsPage() {
@@ -162,6 +172,7 @@ export default function ReportsPage() {
       <button className={tab === 'close' ? 'primary' : 'secondary'} onClick={() => setTab('close')}><ReceiptText size={16} /> Z-Close</button>
       {cashier?.role !== 'cashier' && <button className={tab === 'audit' ? 'primary' : 'secondary'} onClick={() => setTab('audit')}><ShieldCheck size={16} /> Audit Logs</button>}
     </div>
+    {tab !== 'analytics' && <button className="secondary h-10" onClick={() => setTab('analytics')}><ArrowLeft size={16} /> Back to Analytics</button>}
     {tab !== 'close' && <form className="panel flex flex-wrap items-end gap-3 p-3" onSubmit={event => { event.preventDefault(); setActive({ ...range }) }}>
       <Field label="From"><input className="field" type="date" required value={range.from} onChange={event => setRange({ ...range, from: event.target.value })} /></Field>
       <Field label="To"><input className="field" type="date" required value={range.to} onChange={event => setRange({ ...range, to: event.target.value })} /></Field>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChefHat, Minus, Plus, ReceiptText, Search, Split, Trash2, UserRound } from 'lucide-react'
+import { ArrowLeft, ChefHat, Minus, Plus, ReceiptText, Search, Split, Trash2, UserRound } from 'lucide-react'
 import CheckoutModal from '../components/billing/CheckoutModal'
 import ManagerPin from '../components/billing/ManagerPin'
 import { publishPrint } from '../components/billing/PrintPreview'
@@ -46,6 +46,7 @@ export default function BillingPage() {
   const [phone, setPhone] = useState(initial?.customer_phone ?? '')
   const [guestCount, setGuestCount] = useState(initial?.guest_count ? String(initial.guest_count) : '')
   const [busy, setBusy] = useState(false)
+  const [leaving, setLeaving] = useState(false)
   const [checkout, setCheckout] = useState(openCheckout)
   const [splitFirst, setSplitFirst] = useState(false)
   const [confirmVoid, setConfirmVoid] = useState<BillEdit['quantities'][number]>()
@@ -155,7 +156,13 @@ export default function BillingPage() {
 
   if (activeId !== null && !order) return <div className="workspace"><h1>Order closed</h1><button className="secondary" onClick={() => navigate('floor')}>Back to floor map</button></div>
   return <div className="workspace flex h-full min-h-[520px] flex-col gap-3 !space-y-0">
-    <h1 className="shrink-0">Quick Billing</h1>
+    <header className="flex shrink-0 items-center justify-between gap-3">
+      <h1>Quick Billing</h1>
+      {locationId !== null && <button className="secondary h-10" disabled={busy} onClick={() => {
+        if (draft.length || customerChanged) setLeaving(true)
+        else navigate('floor')
+      }}><ArrowLeft size={16} /> Back to Floors</button>}
+    </header>
     <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_420px] gap-4">
       <section className="panel flex min-h-0 min-w-0 flex-col overflow-hidden">
         <div className="flex h-14 shrink-0 items-center gap-1.5 border-b px-2">
@@ -231,6 +238,10 @@ export default function BillingPage() {
         </footer>
       </section>
     </div>
+    {leaving && <Modal compact title="Return to Floors?" onClose={() => setLeaving(false)}>
+      <p className="mb-3 text-sm text-slate-600">Unsent additions and unsaved customer details will be discarded. Saved orders stay open.</p>
+      <button className="primary" onClick={() => navigate('floor')}>Discard Changes and Go Back</button>
+    </Modal>}
     {note && <Modal compact title="Item note" onClose={() => { if (!busy) setNote(undefined) }}>
       <form className="space-y-3" onSubmit={async event => {
         event.preventDefault()

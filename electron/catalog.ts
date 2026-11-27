@@ -1,3 +1,4 @@
+import { foodIdFromReference } from '../src/types/foodLibrary'
 import type { Database } from 'sql.js'
 import { hashPin, PosDatabase } from './db'
 import type { MediaLibrary } from './media'
@@ -128,7 +129,7 @@ export class Catalog {
   menuItem(input: MenuInput) {
     const values = menuValues(input)
     if (!this.db.all('SELECT id FROM categories WHERE id = ?', [input.categoryId]).length) throw new Error('Choose an existing category.')
-    if (input.imagePath !== null && !this.media.read(input.imagePath)) throw new Error('Choose an existing dish photo.')
+    if (input.imagePath !== null && !foodIdFromReference(input.imagePath) && !this.media.read(input.imagePath)) throw new Error('Choose an existing dish photo.')
     const duplicate = this.db.all<{ id: number; name: string }>('SELECT id, name FROM menu_items WHERE category_id = ? AND archived = 0', [input.categoryId])
       .some(row => row.id !== input.id && key(row.name) === key(input.name))
     if (duplicate) throw new Error('This dish already exists in the category.')

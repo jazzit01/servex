@@ -8,6 +8,8 @@ function channel<K extends keyof ServexApi>(name: K, namespace: 'pos' | 'tables'
 
 const api: ServexApi = {
   signIn: channel('signIn'),
+  activeStaff: channel('activeStaff'),
+  authorizeSetup: channel('authorizeSetup'),
   lock: channel('lock'),
   snapshot: channel('snapshot'),
   createOrder: channel('createOrder'),

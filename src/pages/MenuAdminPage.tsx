@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { ArrowDown, ArrowUp, Download, ImagePlus, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react'
+import { ArrowDown, ArrowUp, Download, Images, ImagePlus, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react'
+import FoodLibraryPicker from '../components/FoodLibraryPicker'
 import { Field, MediaThumbnail, Modal, Switch } from '../components/ManagementControls'
 import { runAction, usePosStore } from '../store/usePosStore'
 import type { Category, MenuInput, MenuItem, PickedMedia } from '../types/pos'
@@ -10,12 +11,13 @@ function ItemEditor({ item, categories, selected, defaultTax, onClose, onSave, b
 }) {
   const notify = usePosStore(state => state.notify)
   const [photo, setPhoto] = useState<PickedMedia | null>()
+  const [library, setLibrary] = useState(false)
   const [picking, setPicking] = useState(false)
   const [veg, setVeg] = useState(item ? Boolean(item.is_veg) : true)
   const [available, setAvailable] = useState(item ? Boolean(item.is_available) : true)
   const imagePath = photo === undefined ? item?.image_path ?? null : photo?.name ?? null
   const isBusy = busy || picking
-  return <Modal title={item ? 'Edit menu item' : 'Add menu item'} onClose={() => { if (!isBusy) onClose() }}>
+  return <><Modal title={item ? 'Edit menu item' : 'Add menu item'} onClose={onClose} dismissDisabled={isBusy}>
     <form className="space-y-4" onSubmit={event => {
       event.preventDefault()
       if (isBusy) return
@@ -35,8 +37,9 @@ function ItemEditor({ item, categories, selected, defaultTax, onClose, onSave, b
         <span className="flex items-center gap-2"><Switch checked={veg} onChange={setVeg} label="Vegetarian" disabled={isBusy} /> {veg ? 'Vegetarian' : 'Non-vegetarian'}</span>
         <span className="flex items-center gap-2"><Switch checked={available} onChange={setAvailable} label="In stock" disabled={isBusy} /> In stock</span>
       </div>
-      <div className="flex items-center gap-2 rounded-lg border bg-slate-50 p-3">
-        <MediaThumbnail name={imagePath} preview={photo?.preview} alt="Dish photo" />
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-slate-50 p-3">
+        <MediaThumbnail name={imagePath} preview={photo?.preview || undefined} alt="Dish photo" />
+        <button className="secondary" type="button" disabled={isBusy} onClick={() => setLibrary(true)}><Images size={16} /> Choose from Built-in Library</button>
         <button className="secondary" type="button" disabled={isBusy} onClick={async () => {
           setPicking(true)
           try {
@@ -44,13 +47,18 @@ function ItemEditor({ item, categories, selected, defaultTax, onClose, onSave, b
             if (picked) setPhoto(picked)
           } catch (error) { notify((error as Error).message, true) }
           finally { setPicking(false) }
-        }}><ImagePlus size={16} /> Choose dish photo</button>
-        {imagePath && <button className="secondary" type="button" disabled={isBusy} onClick={() => setPhoto(null)}>Remove</button>}
+        }}><ImagePlus size={16} /> Upload Custom Photo</button>
+        {imagePath && <button className="secondary" type="button" disabled={isBusy} onClick={() => setPhoto(null)}>Remove Photo</button>}
       </div>
-      <div className="flex justify-end gap-2"><button className="secondary" type="button" disabled={isBusy} onClick={onClose}>Cancel</button>
+      <div className="flex justify-end gap-2">
         <button className="primary" disabled={isBusy || !categories.length}>Save item</button></div>
     </form>
   </Modal>
+  {library && <FoodLibraryPicker close={() => setLibrary(false)} choose={reference => {
+    setPhoto({ name: reference, preview: '' })
+    setLibrary(false)
+  }} />}
+  </>
 }
 
 const pageSize = 40

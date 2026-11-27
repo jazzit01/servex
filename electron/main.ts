@@ -1,3 +1,4 @@
+import { withDialogFocus } from './dialogFocus'
 import { app, BrowserWindow, dialog, ipcMain, IpcMainInvokeEvent } from 'electron'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
@@ -22,6 +23,7 @@ app.setAppUserModelId('com.servex.pos')
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=1536')
 let window: BrowserWindow | null = null
 let cashier: Cashier | null = null
+let rendererEpoch = 0
 
 function createWindow() {
   const icon = app.isPackaged ? path.join(process.resourcesPath, 'icon.ico') : path.join(app.getAppPath(), 'build/icon.ico')
@@ -34,7 +36,7 @@ function createWindow() {
   window.webContents.on('will-navigate', event => event.preventDefault())
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, reply) => reply(false))
   window.webContents.on('did-start-navigation', (_event, _url, inPlace, mainFrame) => {
-    if (mainFrame && !inPlace) cashier = null
+    if (mainFrame && !inPlace) { cashier = null; rendererEpoch++ }
   })
   window.once('ready-to-show', () => { window?.maximize(); window?.show() })
   window.on('closed', () => { window = null; cashier = null })
@@ -90,15 +92,39 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
   const localDay = () => reports.day()
   let nextSignIn = 0
   let nextOverride = 0
-  register('signIn', 'public', (pin: string) => {
-    if (needsSetup() || licenseState().mode === 'expired') throw new Error('Finish setup or activate ServeX before signing in.')
+  let setupGrant: { id: number; owner: BrowserWindow; epoch: number; until: number } | null = null
+  const setupAdmin = () => {
+    if (!setupGrant || setupGrant.owner !== window || setupGrant.epoch !== rendererEpoch || Date.now() >= setupGrant.until) return undefined
+    return db.all<{ id: number }>("SELECT id FROM users WHERE id=? AND role='admin' AND is_active=1", [setupGrant.id])[0]
+  }
+  function authenticate(pin: string, staffId?: number, adminsOnly = false) {
     if (Date.now() < nextSignIn) throw new Error('Wait a moment before trying again.')
     nextSignIn = Date.now() + 750
-    if (typeof pin !== 'string' || !/^\d{4,12}$/.test(pin)) return null
-    cashier = db.all<Cashier>('SELECT id, name, role FROM users WHERE pin = ? AND is_active = 1 ORDER BY id LIMIT 1', [pinDigest(db, pin)])[0] ?? null
+    if (typeof pin !== 'string' || !/^\d{4,12}$/.test(pin) || (staffId !== undefined && !Number.isSafeInteger(staffId))) return null
+    return db.all<Cashier>(`SELECT id, name, role FROM users WHERE pin=? AND is_active=1
+      AND (? IS NULL OR id=?) AND (?=0 OR role='admin') ORDER BY id LIMIT 1`,
+    [pinDigest(db, pin), staffId ?? null, staffId ?? null, Number(adminsOnly)])[0] ?? null
+  }
+  register('activeStaff', 'public', () => db.all<Cashier>('SELECT id, name, role FROM users WHERE is_active=1 ORDER BY id'))
+  register('signIn', 'public', (pin, staffId) => {
+    if (needsSetup() || licenseState().mode === 'expired') throw new Error('Finish setup or activate ServeX before signing in.')
+    setupGrant = null
+    cashier = authenticate(pin, staffId)
     return cashier
   })
-  register('lock', 'public', () => { cashier = null; printer.clear() })
+  register('authorizeSetup', 'public', pin => {
+    if (cashier || needsSetup()) throw new Error('Administrator recovery is only available from staff sign-in.')
+    setupGrant = null
+    const user = authenticate(pin, undefined, true)
+    if (!user) throw new Error('Enter the PIN of an active administrator.')
+    setupGrant = { id: user.id, owner: window!, epoch: rendererEpoch, until: Date.now() + 30 * 60 * 1000 }
+    const config = settings()
+    const preview = media.preview(config.logo_path)
+    return { input: { name: config.restaurant_name, phone: config.phone ?? '', address: config.address ?? '', gstin: config.gstin ?? '',
+      logo: config.logo_path, preset: 'dinein', tax: config.tax_rate, upi: config.upi_id, pin: '' },
+      logo: preview && config.logo_path ? { name: config.logo_path, preview } : null }
+  })
+  register('lock', 'public', () => { cashier = null; setupGrant = null; printer.clear() })
   register('snapshot', 'staff', (): Snapshot => {
     const config = settings()
     return {
@@ -207,29 +233,43 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
   register('toggleItem', 'manager', (id: number) => db.write('UPDATE menu_items SET is_available = 1 - is_available WHERE id = ? AND archived = 0', [id]))
   register('startup', 'public', () => ({ onboarding: needsSetup(), license: licenseState() }))
   register('setupLogo', 'public', () => {
-    if (!needsSetup()) throw new Error('Initial setup is already complete.')
-    return media.pick(window!, needsSetup)
+    const grant = setupGrant
+    const allowed = () => needsSetup() || Boolean(grant && setupGrant === grant && setupAdmin())
+    if (!allowed()) throw new Error('Administrator verification is required.')
+    return media.pick(window!, allowed)
   })
   register('finishSetup', 'public', input => {
-    if (!needsSetup()) throw new Error('Initial setup is already complete.')
+    const fresh = needsSetup()
+    const admin = setupAdmin()
+    if (!fresh && !admin) throw new Error('Administrator verification is required.')
     const name = nameOf(input.name, 'restaurant name')
-    const pin = pinDigest(db, validPin(input.pin))
+    const pin = fresh || input.pin ? pinDigest(db, validPin(input.pin)) : null
+    if (admin && pin && db.all('SELECT id FROM users WHERE pin=? AND is_active=1 AND id!=?', [pin, admin.id]).length) {
+      throw new Error('Another active staff member already uses that PIN.')
+    }
+    const currentLogo = settings().logo_path
     if (!['dinein','garden','lodging'].includes(input.preset) || !Number.isFinite(input.tax) || input.tax < 0 || input.tax > 100 ||
       typeof input.upi !== 'string' || !/^[\w.+-]{1,120}@[\w.-]{1,64}$/.test(input.upi) ||
-      (input.logo !== null && !media.read(input.logo))) throw new Error('Check the venue preset, tax rate, UPI ID, and logo.')
+      (input.logo !== null && input.logo !== currentLogo && !media.read(input.logo))) throw new Error('Check the venue preset, tax rate, UPI ID, and logo.')
     const trim = (value: string) => {
       if (typeof value !== 'string' || value.length > 250) throw new Error('A restaurant field exceeds 250 characters.')
       return value.trim() || null
     }
     db.transaction(sql => {
       sql.run(`UPDATE settings SET restaurant_name=?, phone=?, address=?, gstin=?, logo_path=?, tax_rate=?,
-        upi_id=?, onboarding_completed=1, tagline=NULL WHERE id=1`,
-      [name, trim(input.phone), trim(input.address), trim(input.gstin), input.logo, input.tax, input.upi])
-      sql.run('UPDATE menu_items SET tax_slab=?', [input.tax])
-      sql.run("UPDATE users SET pin=? WHERE id=(SELECT id FROM users WHERE role='admin' AND is_active=1 ORDER BY id LIMIT 1)", [pin])
-      if (input.preset !== 'garden') sql.run("DELETE FROM zones WHERE name='Garden Lawn'")
-      if (input.preset !== 'lodging') sql.run("DELETE FROM zones WHERE name='Luxury Rooms'")
+        upi_id=?, onboarding_completed=1, tagline=CASE WHEN ? THEN NULL ELSE tagline END WHERE id=1`,
+      [name, trim(input.phone), trim(input.address), trim(input.gstin), input.logo, input.tax, input.upi, Number(fresh)])
+      if (fresh) {
+        sql.run('UPDATE menu_items SET tax_slab=?', [input.tax])
+        sql.run("UPDATE users SET pin=? WHERE id=(SELECT id FROM users WHERE role='admin' AND is_active=1 ORDER BY id LIMIT 1)", [pin])
+        if (input.preset !== 'garden') sql.run("DELETE FROM zones WHERE name='Garden Lawn'")
+        if (input.preset !== 'lodging') sql.run("DELETE FROM zones WHERE name='Luxury Rooms'")
+      } else {
+        if (pin) sql.run('UPDATE users SET pin=? WHERE id=?', [pin, admin!.id])
+        sql.run("INSERT INTO audit_logs (user_id,action,entity_type) VALUES (?,'REOPEN_SETUP','settings')", [admin!.id])
+      }
     })
+    setupGrant = null
   })
   register('activateLicense', 'public', key => {
     if (!license.accepts(key)) throw new Error('Activation key is invalid for this machine or the issuer key is missing.')
@@ -313,9 +353,9 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
         [cashier!.id, JSON.stringify({ managerPinChanged: digest !== null, licenseChanged: input.licenseKey !== undefined })])
     })
   })
-  const pickImage = async () => {
+  const pickImage = async (dishPhoto = false) => {
     const actor = cashier
-    return media.pick(window!, () => cashier === actor)
+    return media.pick(window!, () => cashier === actor, dishPhoto)
   }
   register('pickLogo', 'manager', async () => {
     const actor = cashier
@@ -325,7 +365,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     return true
   })
   register('removeLogo', 'manager', () => db.write('UPDATE settings SET logo_path = NULL WHERE id = 1'))
-  register('pickMedia', 'manager', pickImage)
+  register('pickMedia', 'manager', () => pickImage(true))
   register('readMedia', 'staff', name => media.preview(name))
   register('listStaff', 'admin', () => catalog.staff())
   register('saveStaff', 'admin', input => {
@@ -346,7 +386,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
   const backupFilter = [{ name: 'ServeX backup', extensions: ['svxbak'] }]
   async function saveFile(bytes: () => Uint8Array, defaultPath: string, filters: Electron.FileFilter[]) {
     const actor = cashier
-    const result = await dialog.showSaveDialog(window!, { defaultPath, filters })
+    const result = await withDialogFocus(window!, parent => dialog.showSaveDialog(parent, { defaultPath, filters }))
     if (result.canceled || !result.filePath || cashier !== actor) return false
     const extension = '.' + filters[0].extensions[0]
     const file = result.filePath.toLowerCase().endsWith(extension) ? result.filePath : result.filePath + extension
@@ -355,19 +395,42 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
   }
   register('exportAudit', 'manager', query => saveFile(() => Buffer.from(reports.csv(query)),
     `ServeX_Audit_${query.from}_${query.to}.csv`, csvFilter))
-  register('restoreSetup', 'public', async passphrase => {
-    if (!needsSetup()) throw new Error('Initial setup is already complete.')
-    validatePassphrase(passphrase)
-    const result = await dialog.showOpenDialog(window!, { properties: ['openFile'], filters: backupFilter })
-    if (result.canceled || !needsSetup()) return false
-    backup.restore(result.filePaths[0], passphrase, undefined, passphrase)
+  async function restoreSelectedBackup(passphrase: string, authorized: () => boolean, fresh = false) {
+    validatePassphrase(passphrase, fresh || Boolean(passphrase))
+    const result = await withDialogFocus(window!, parent => dialog.showOpenDialog(parent, { properties: ['openFile'], filters: backupFilter }))
+    if (result.canceled || !authorized()) return false
+    if (!fresh) {
+      const confirm = await withDialogFocus(window!, parent => dialog.showMessageBox(parent, {
+        type: 'warning', buttons: ['Cancel', 'Restore backup'], defaultId: 0, cancelId: 0,
+        message: 'Replace the current ServeX database with this backup?',
+        detail: 'ServeX creates an encrypted recovery snapshot before replacing the database.',
+      }))
+      if (confirm.response !== 1 || !authorized()) return false
+    }
+    let localKey: string | undefined
+    if (!fresh) {
+      try { localKey = secrets.localKey() }
+      catch { if (!passphrase) throw new Error('Enter a backup passphrase to continue without OS credential storage.') }
+    }
+    if (printing.size) throw new Error('Wait for the active print dialog before restoring a backup.')
+    backup.restore(result.filePaths[0], passphrase, localKey, localKey ?? passphrase)
+    lan.stop()
     db.write('UPDATE settings SET onboarding_completed=1,lan_enabled=0,lan_actor=NULL WHERE id=1')
     cloud.invalidate()
+    printer.clear()
+    setupGrant = null
     return true
+  }
+  register('restoreSetup', 'public', async passphrase => {
+    const fresh = needsSetup()
+    const grant = setupGrant
+    const allowed = () => fresh ? needsSetup() : Boolean(grant && setupGrant === grant && setupAdmin())
+    if (!allowed()) throw new Error('Administrator verification is required.')
+    return restoreSelectedBackup(passphrase, allowed, fresh)
   })
   register('importMenuCsv', 'manager', async () => {
     const actor = cashier
-    const result = await dialog.showOpenDialog(window!, { properties: ['openFile'], filters: csvFilter })
+    const result = await withDialogFocus(window!, parent => dialog.showOpenDialog(parent, { properties: ['openFile'], filters: csvFilter }))
     if (result.canceled || cashier !== actor) return null
     const file = result.filePaths[0]
     if (fs.statSync(file).size > 4 * 1024 * 1024) throw new Error('Choose a CSV smaller than 4 MB.')
@@ -381,25 +444,9 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     return saveFile(() => backup.archive(passphrase), backupFilename(), backupFilter)
   })
   register('importBackup', 'admin', async passphrase => {
-    validatePassphrase(passphrase, Boolean(passphrase))
     const actor = cashier!
-    const result = await dialog.showOpenDialog(window!, { properties: ['openFile'], filters: backupFilter })
-    if (result.canceled || cashier !== actor) return false
-    const confirm = await dialog.showMessageBox(window!, {
-      type: 'warning', buttons: ['Cancel', 'Restore backup'], defaultId: 0, cancelId: 0,
-      message: 'Replace the current ServeX database with this backup?',
-      detail: 'ServeX creates an encrypted recovery snapshot before replacing the database.',
-    })
-    if (confirm.response !== 1 || cashier !== actor) return false
-    let localKey: string | undefined
-    try { localKey = secrets.localKey() } catch { if (!passphrase) throw new Error('Enter a backup passphrase to continue without OS credential storage.') }
-    if (printing.size) throw new Error('Wait for the active print dialog before restoring a backup.')
     const previous = db.all<{ pin: string }>('SELECT pin FROM users WHERE id = ?', [actor.id])[0].pin
-    backup.restore(result.filePaths[0], passphrase, localKey, localKey ?? passphrase)
-    lan.stop()
-    db.write('UPDATE settings SET lan_enabled=0,lan_actor=NULL WHERE id=1')
-    cloud.invalidate()
-    printer.clear()
+    if (!await restoreSelectedBackup(passphrase, () => cashier === actor)) return false
     const restored = db.all<Cashier>(
       "SELECT id, name, role FROM users WHERE id = ? AND role = 'admin' AND is_active = 1 AND pin = ?", [actor.id, previous],
     )[0]
