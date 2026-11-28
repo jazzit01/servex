@@ -177,3 +177,19 @@ test('UPI links carry an exact INR amount and escape merchant details', () => {
   assert.equal(url.href, 'upi://pay?pa=shop%40upi&pn=Spice%20%26%20Tea&am=42.10&cu=INR')
   assert.equal(url.searchParams.get('pn'), 'Spice & Tea')
 })
+
+test('bulk layout saves a pastel zone and its individual capacities atomically', async t => {
+  const { db, service } = await setup(t)
+  const zone = { id: -1, name: 'Poolside', color: 'rose' }
+  const first = { x_pos: 40, y_pos: 40, width: 160, height: 120, zoneId: zone.id, label: 'POOL-01', type: 'table', capacity: 4 }
+  const second = { ...first, x_pos: 220, label: 'POOL-02', capacity: 7 }
+  assert.throws(() => service.saveLayout([first, { ...second, label: first.label }], [zone]), /already exists/)
+  assert.equal(db.all("SELECT id FROM zones WHERE name='Poolside'").length, 0)
+  assert.equal(db.all("SELECT id FROM tables WHERE label LIKE 'POOL-%'").length, 0)
+  assert.throws(() => service.saveLayout([first], [{ ...zone, color: 'black' }]), /Invalid new zone/)
+  service.saveLayout([first, second], [zone])
+  db.restore(db.bytes(), () => {})
+  assert.deepEqual(db.all("SELECT color, label, capacity FROM zones JOIN tables ON zones.id=zone_id WHERE zones.name='Poolside' ORDER BY label"), [
+    { color: 'rose', label: 'POOL-01', capacity: 4 }, { color: 'rose', label: 'POOL-02', capacity: 7 },
+  ])
+})

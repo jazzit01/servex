@@ -8,6 +8,7 @@ function restoreRequiredMenuReference(db) {
 function removeEnterprise(db) {
   restoreRequiredMenuReference(db)
   db.run(`
+    ALTER TABLE zones DROP COLUMN color;
     DROP TABLE loyalty_ledger;
     DROP TABLE ingredient_movements;
     DROP TABLE menu_recipes;

@@ -96,7 +96,7 @@ export default function SmartCalculatorModal({ close, tape, record, besideCart }
         {keys.map(key => <button key={key} className={`h-9 justify-center ${key === '=' ? 'primary' : 'secondary'}`} onClick={() => press(key)}>{symbol(key)}</button>)}
       </div>
       {apply && (charge === null ? <div className="grid gap-1.5 border-t pt-3">
-        <button className="secondary justify-center" onClick={() => bridge('charge')}>Add to Cart as Custom Item</button>
+        <button className="secondary justify-center" onClick={() => bridge('charge')}>Add to Cart as Custom Charge</button>
         <button className="secondary justify-center" onClick={() => bridge('discount')}>Apply as Flat Discount</button>
         <button className="secondary justify-center" onClick={() => bridge('tender')}>Set Cash Tendered</button>
       </div> : <form className="space-y-2 border-t pt-3" onSubmit={event => {

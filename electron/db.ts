@@ -152,10 +152,12 @@ DROP TABLE order_items;
 ALTER TABLE order_items_v8 RENAME TO order_items;
 `
 
+const v9ZoneColor = "ALTER TABLE zones ADD COLUMN color TEXT CHECK(color IN ('sky','emerald','amber','purple','rose','teal','indigo','orange'));"
+
 function migrate(db: Database) {
   db.run('PRAGMA foreign_keys = ON')
   const version = Number(db.exec('PRAGMA user_version')[0].values[0][0])
-  if (version > 8) throw new Error('This database requires a newer ServeX version.')
+  if (version > 9) throw new Error('This database requires a newer ServeX version.')
   db.run('BEGIN')
   const fresh = version === 0 && !db.exec("SELECT name FROM sqlite_master WHERE name = 'settings' AND type = 'table'").length
   if (version < 1) db.run(schema + 'PRAGMA user_version = 1;')
@@ -266,6 +268,7 @@ function migrate(db: Database) {
     db.run('PRAGMA user_version = 7')
   }
   if (version < 8) db.run(v8OrderItems + 'PRAGMA user_version = 8;')
+  if (version < 9) db.run(v9ZoneColor + 'PRAGMA user_version = 9;')
   db.run('COMMIT')
 }
 
@@ -344,6 +347,7 @@ export class PosDatabase {
         if (version >= 5) reference.run(v5Schema)
         if (version >= 7) enterpriseMigrate(reference)
         if (version >= 8) reference.run(v8OrderItems)
+        if (version >= 9) reference.run(v9ZoneColor)
         const tables = reference.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")[0].values.flat()
         const codeObjects = "SELECT name, sql FROM sqlite_master WHERE type IN ('trigger', 'view') ORDER BY name"
         if (JSON.stringify(candidate.exec(codeObjects)) !== JSON.stringify(reference.exec(codeObjects)) ||

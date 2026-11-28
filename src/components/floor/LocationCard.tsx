@@ -1,13 +1,14 @@
 import { useState, useRef, type PointerEvent } from 'react'
 import { BedDouble, Clock3, MoveDiagonal2, Trees, Users, Utensils } from 'lucide-react'
 import { editRect, GRID } from '../../types/floorLayout'
+import type { zoneAppearance } from './zoneAppearance'
 import type { FloorTable, LayoutRect, Order } from '../../types/pos'
 
 export const statusVisuals = {
-  vacant: { title: 'Vacant', label: 'Available', dot: 'bg-slate-200', card: 'border-slate-200 bg-white text-slate-800' },
-  occupied: { title: 'Occupied', label: 'Occupied', dot: 'bg-amber-500', card: 'border-amber-500 bg-amber-50 text-amber-950' },
-  billed: { title: 'Bill Printed', label: 'Bill Printed', dot: 'bg-emerald-500', card: 'border-emerald-500 bg-emerald-50 text-emerald-950' },
-  cleaning: { title: 'Cleaning', label: 'Needs Cleaning', dot: 'bg-rose-400', card: 'border-rose-400 bg-rose-50 text-rose-950' },
+  vacant: { title: 'Vacant', label: 'Available', dot: 'bg-slate-200', card: 'border-slate-300' },
+  occupied: { title: 'Occupied', label: 'Occupied', dot: 'bg-amber-500', card: 'border-amber-500' },
+  billed: { title: 'Bill Printed', label: 'Bill Printed', dot: 'bg-emerald-500', card: 'border-emerald-500' },
+  cleaning: { title: 'Cleaning', label: 'Needs Cleaning', dot: 'bg-rose-400', card: 'border-rose-400' },
 } as const
 
 const typeIcons = { table: Utensils, garden: Trees, room: BedDouble }
@@ -18,15 +19,15 @@ interface Gesture {
   left: number; top: number
 }
 
-export default function LocationCard({ location, order, now, currency, editing, disabled, onClick, onLayout }: {
-  location: FloorTable; order?: Order; now: number; currency: string; editing: boolean; disabled: boolean
+export default function LocationCard({ location, appearance, order, now, currency, editing, disabled, onClick, onLayout }: {
+  location: FloorTable; appearance: ReturnType<typeof zoneAppearance>; order?: Order; now: number; currency: string; editing: boolean; disabled: boolean
   onClick: () => void; onLayout: (rect: LayoutRect) => void
 }) {
   const [preview, setPreview] = useState<LayoutRect | null>(null)
   const gesture = useRef<Gesture | null>(null)
   const rect = preview ?? location
-  const Icon = typeIcons[location.type]
   const status = statusVisuals[location.status]
+  const TypeIcon = typeIcons[location.type]
   const date = order && Date.parse(order.created_at.replace(' ', 'T') + (order.created_at.includes('Z') ? '' : 'Z'))
   const minutes = date && Number.isFinite(date) ? Math.max(0, Math.floor((now - date) / 60000)) : 0
   const timer = minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`
@@ -67,7 +68,7 @@ export default function LocationCard({ location, order, now, currency, editing, 
 
   return <button type="button" disabled={disabled} title={location.label}
     aria-label={`${location.label}, ${status.title}${editing ? '. Use arrows to move or Shift and arrows to resize' : ''}`}
-    className={`absolute flex flex-col justify-between rounded-xl border-2 p-3 text-left shadow-sm ${status.card} ${editing ? 'touch-none select-none cursor-grab active:cursor-grabbing' : 'transition hover:brightness-95 hover:shadow-md'} ${preview ? 'z-10 ring-2 ring-teal-500' : ''}`}
+    className={`absolute flex flex-col justify-between rounded-xl border-2 bg-white py-2 pl-3 pr-2 text-left text-slate-800 shadow-sm dark:bg-slate-900 ${status.card} ${editing ? 'touch-none select-none cursor-grab active:cursor-grabbing' : 'transition hover:brightness-95 hover:shadow-md'} ${preview ? 'z-10 ring-2 ring-teal-500' : ''}`}
     style={{ left: rect.x_pos, top: rect.y_pos, width: rect.width, height: rect.height }}
     onPointerDown={begin} onPointerMove={move} onPointerUp={event => finish(event.pointerId, true)}
     onPointerCancel={event => finish(event.pointerId, false)} onLostPointerCapture={event => finish(event.pointerId, false)}
@@ -79,16 +80,20 @@ export default function LocationCard({ location, order, now, currency, editing, 
       const y = event.key === 'ArrowUp' ? -GRID : event.key === 'ArrowDown' ? GRID : 0
       onLayout(editRect(location, x, y, event.shiftKey))
     }}>
-    <span className="flex min-w-0 items-center justify-between gap-1">
-      <span className="flex min-w-0 items-center gap-1.5"><Icon size={16} className="shrink-0" /><strong className="truncate text-sm">{location.label}</strong></span>
-      <span className="flex shrink-0 items-center gap-1 rounded-md bg-white/80 px-1.5 py-0.5 text-[10px] font-semibold" title={`Capacity ${location.capacity}`}>
+    <span aria-hidden className={`absolute inset-y-0 left-0 w-1.5 rounded-l-[9px] ${appearance.accent}`}/>
+    <span className="flex min-w-0 items-start justify-between gap-1">
+      <span className="flex min-w-0 flex-col items-start gap-0.5">
+        <span className={`flex items-center gap-1 rounded px-1 text-[10px] font-bold ${appearance.badge}`}><TypeIcon size={11}/>{appearance.prefix}</span>
+        <strong className="max-w-full truncate text-sm">{location.label}</strong>
+      </span>
+      <span className="flex shrink-0 items-center gap-1 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums" title={`Capacity ${location.capacity}`}>
         <Users size={12} />{location.capacity}
       </span>
     </span>
     {order?.customer_name && <span className="truncate text-xs font-medium" title={order.customer_name}>{order.customer_name}</span>}
     <span className="flex min-w-0 flex-wrap items-center justify-between gap-x-1 text-xs tabular-nums">
       {order ? <><strong className="truncate" title={total}>{total}</strong><span className="inline-flex items-center gap-1 whitespace-nowrap"><Clock3 size={12} />{timer}</span></>
-        : <span className="font-medium">{status.label}</span>}
+        : <span className="flex items-center gap-1 font-medium"><span className={`size-2 shrink-0 rounded-full ${status.dot}`}/>{status.label}</span>}
     </span>
     {editing && <span data-resize title="Drag to resize" className="absolute bottom-0 right-0 grid size-5 cursor-nwse-resize place-items-center rounded-tl-md bg-teal-700 text-white"><MoveDiagonal2 size={13} /></span>}
   </button>

@@ -29,7 +29,10 @@ export interface Settings {
   licenseActive: boolean
 }
 export type SettingsInput = Pick<Settings, 'restaurant_name' | 'tagline' | 'address' | 'phone' | 'gstin' | 'currency_symbol' | 'tax_rate' | 'tax_inclusive' | 'receipt_footer'> & { managerPin?: string; licenseKey?: string; auto_cleaning?: number; upi_id?: string; receipt_width?: number; print_preview?: number; printer_name?: string }
-export interface Zone { id: number; name: string; sort_order: number }
+export const zoneColors = ['sky', 'emerald', 'amber', 'purple', 'rose', 'teal', 'indigo', 'orange'] as const
+export type ZoneColor = typeof zoneColors[number]
+export interface Zone { id: number; name: string; sort_order: number; color: ZoneColor | null }
+export interface LayoutZone { id: number; name: string; color: ZoneColor }
 export interface FloorTable {
   id: number; zone_id: number; label: string; type: 'table' | 'garden' | 'room'
   x_pos: number; y_pos: number; width: number; height: number; capacity: number; status: TableStatus
@@ -83,7 +86,7 @@ export interface ServexApi {
   reprintReceipt(id: number): Promise<PrintResult>
   voidReceipt(id: number, pin: string): Promise<void>
   printPreview(jobId: string): Promise<void>
-  saveLayout(updates: LayoutUpdate[]): Promise<void>
+  saveLayout(updates: LayoutUpdate[], zones?: LayoutZone[]): Promise<void>
   transfer(input: TableTransfer): Promise<void>
   merge(input: TableMerge): Promise<void>
   updateStatus(input: TableStatusUpdate): Promise<void>

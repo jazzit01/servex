@@ -201,7 +201,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     await view.loadURL(homePage+'#/customer-display')
   })
 
-  register('saveLayout', 'manager', updates => service.saveLayout(updates), 'tables')
+  register('saveLayout', 'manager', (updates, zones) => service.saveLayout(updates, zones), 'tables')
   register('transfer', 'staff', input => {
     ensureIdle(input.orderId)
     service.transfer(input, cashier!.id)

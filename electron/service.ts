@@ -7,8 +7,9 @@ import type { PosDatabase } from './db'
 import { GRID, MAX_CANVAS, MIN_HEIGHT, MIN_WIDTH } from '../src/types/floorLayout'
 import { splitReceipt } from '../src/types/settlement'
 import { lineAmounts } from '../src/types/pricing'
+import { zoneColors } from '../src/types/pos'
 import type {
-  BillEdit, CartItem, FloorTable, LayoutUpdate, MenuItem, Order, OrderInput, OrderItem,
+  LayoutZone, Zone, BillEdit, CartItem, FloorTable, LayoutUpdate, MenuItem, Order, OrderInput, OrderItem,
   BillSplit, CheckoutPayment, KitchenTicket, TableMerge, TableStatusUpdate, TableTransfer,
 } from '../src/types/pos'
 
@@ -66,15 +67,28 @@ export class FloorService {
     return table
   }
 
-  saveLayout(updates: LayoutUpdate[]) {
+  saveLayout(updates: LayoutUpdate[], newZones: LayoutZone[] = []) {
     if (!Array.isArray(updates) || updates.length < 1 || updates.length > 1000) throw new Error('Save 1 to 1,000 layout changes at a time.')
+    if (!Array.isArray(newZones) || newZones.length > 30) throw new Error('Save up to 30 new zones at a time.')
     const rows = this.db.all<FloorTable>('SELECT * FROM tables')
     const byId = new Map(rows.map(row => [row.id, row]))
-    const zoneIds = new Set(this.db.all<{ id: number }>('SELECT id FROM zones').map(row => row.id))
+    const zones = this.db.all<Zone>('SELECT * FROM zones')
+    const zoneIds = new Map(zones.map(row => [row.id, row.id]))
+    const zoneNames = new Set(zones.map(row => row.name.normalize('NFC').trim().toLowerCase()))
     const labelKey = (zone: number, label: string) => JSON.stringify([zone, label.normalize('NFC').trim().toLowerCase()])
     const labels = new Set(rows.map(row => labelKey(row.zone_id, row.label)))
     const seen = new Set<number>()
     this.db.transaction(sql => {
+      for (const zone of newZones) {
+        if (!zone || !Number.isSafeInteger(zone.id) || zone.id >= 0 || zoneIds.has(zone.id) ||
+            !zoneColors.includes(zone.color) || !updates.some(row => row?.zoneId === zone.id)) throw new Error('Invalid new zone.')
+        const name = nameOf(zone.name, 'zone name')
+        const key = name.normalize('NFC').trim().toLowerCase()
+        if (zoneNames.has(key)) throw new Error('This zone already exists.')
+        zoneNames.add(key)
+        sql.run('INSERT INTO zones (name, color, sort_order) SELECT ?, ?, COALESCE(MAX(sort_order), -1) + 1 FROM zones', [name, zone.color])
+        zoneIds.set(zone.id, Number(sql.exec('SELECT last_insert_rowid()')[0].values[0][0]))
+      }
       for (const row of updates) {
         if (!row || !zoneIds.has(row.zoneId)) throw new Error('The layout includes an unavailable zone.')
         const rect = [row.x_pos, row.y_pos, row.width, row.height]
@@ -95,7 +109,7 @@ export class FloorService {
           if (labels.has(unique)) throw new Error(`Location "${label}" already exists in this zone.`)
           labels.add(unique)
           sql.run('INSERT INTO tables (zone_id, label, type, capacity, x_pos, y_pos, width, height) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            [row.zoneId, label, row.type, row.capacity, ...rect])
+            [zoneIds.get(row.zoneId)!, label, row.type, row.capacity, ...rect])
         }
       }
     })

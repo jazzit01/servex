@@ -140,7 +140,7 @@ test('v7 orders survive upgrade and custom charges can be discounted and restore
   const old = new sqlite.Database(db.bytes())
   const { restoreRequiredMenuReference } = require('./helpers/legacy-schema.cjs')
   restoreRequiredMenuReference(old)
-  old.run('PRAGMA user_version=7')
+  old.run('ALTER TABLE zones DROP COLUMN color; PRAGMA user_version=7')
   db.restore(old.export(), () => {})
   old.close()
   assert.equal(service.lines(existing)[0].menu_item_id, 1)
