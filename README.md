@@ -45,14 +45,16 @@ A new device gets seven days of full trial access. Offline activation requires a
 node scripts/generate-license.js --init-keys
 ```
 
-This writes the private PEM to the ignored `scripts/license-private.pem` and prints the public PEM. Keep a secure copy of the private file. To store it outside the checkout, pass a secure file path after `--init-keys` and set `SERVEX_LICENSE_PRIVATE_KEY_FILE` to that path when issuing licenses.
+Run this locally in a private terminal. It prints the private and public PEMs. Save the full private PEM, including its header and footer, as the GitHub Actions repository secret `SERVEX_PRIVATE_KEY`. For local issuing, put the same PEM in the `SERVEX_PRIVATE_KEY` environment variable or in the ignored root `.env` as a quoted multiline value. You can also pass a secure file path after `--init-keys` to save the private PEM there and print only the public PEM. Set `SERVEX_LICENSE_PRIVATE_KEY_FILE` to that path when issuing locally.
 
 Set `PUBLIC_KEY_PEM` in `electron/license.ts` to the printed public PEM, including the header and footer, then run `npm run build:win`. Builds already using `build/license-public.pem` can keep that configuration. If you already have an issuer pair, reuse it so existing Ed25519 activations continue to work.
 
-Ask the customer for the device ID shown in **Activate ServeX**, then generate their key:
+Ask the customer for the 24-character hexadecimal Device ID shown in **Activate ServeX**. From a phone browser, open the repository's **Actions → Generate ServeX License → Run workflow**. Enter the Device ID and an optional customer name, then open the completed run's **Summary** to copy the key. The summary and run logs are visible to people who can view the workflow run, so use a customer reference if names should stay private.
+
+For local issuing, run:
 
 ```sh
-node scripts/generate-license.js DEVICE_ID
+node scripts/generate-license.js DEVICE_ID "Customer Name"
 ```
 
 The resulting `SVX-…` token contains a Base64url Ed25519 signature bound to that device. The verifier also accepts the earlier hex Ed25519 format. To rotate an issuer, run `--init-keys` with a new private file path, embed the matching public PEM, rebuild, and reissue activations for that release.

@@ -5,3 +5,4 @@ release/
 data/
 
 /scripts/license-private.pem
+/.env

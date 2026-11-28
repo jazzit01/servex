@@ -57,12 +57,13 @@ test('issuer-generated activation verifies only on the matching device and an ex
   const dir = sandbox(t)
   const cli = path.resolve('scripts/generate-license.js')
   const privateKey = path.join(dir, 'issuer.pem')
-  const publicKey = execFileSync(process.execPath, [cli, '--init-keys', privateKey], { encoding: 'utf8' })
+  const env = { ...process.env, GITHUB_ACTIONS: '', GITHUB_STEP_SUMMARY: '', SERVEX_PRIVATE_KEY: '' }
+  const publicKey = execFileSync(process.execPath, [cli, '--init-keys', privateKey], { encoding: 'utf8', env })
   const trialFile = path.join(dir, 'clock.json')
   const license = new LicenseManager(trialFile, publicKey)
   assert.equal(license.state(null).mode, 'trial')
   const token = execFileSync(process.execPath, [cli, ' ' + license.machine.toLowerCase() + ' '], {
-    encoding: 'utf8', env: { ...process.env, SERVEX_LICENSE_PRIVATE_KEY_FILE: privateKey },
+    encoding: 'utf8', env: { ...env, SERVEX_LICENSE_PRIVATE_KEY_FILE: privateKey },
   }).trim()
   assert.match(token, /^SVX-[A-Za-z0-9_-]{86}$/)
   assert.equal(verify(null, Buffer.from(license.machine), publicKey, Buffer.from(token.slice(4), 'base64url')), true)
@@ -111,4 +112,36 @@ test('LAN requires pairing, streams updates, and deduplicates order retries', as
   const conflict = await fetch(url + '/api/v1/orders', { ...request, body: request.body.replace('"quantity":1','"quantity":2') })
   assert.equal(conflict.status, 409)
   assert.equal(db.all('SELECT COUNT(*) AS count FROM orders')[0].count, 1)
+})
+
+test('mobile license issuer reads the secret and writes a safe run summary', t => {
+  const dir = sandbox(t)
+  const scriptDir = path.join(dir, 'scripts')
+  fs.mkdirSync(scriptDir)
+  const cli = path.join(scriptDir, 'generate-license.js')
+  fs.copyFileSync(path.resolve('scripts/generate-license.js'), cli)
+  const env = { ...process.env, GITHUB_ACTIONS: '', GITHUB_STEP_SUMMARY: '', SERVEX_PRIVATE_KEY: '' }
+  const generated = execFileSync(process.execPath, [cli, '--init-keys'], { encoding: 'utf8', env })
+  const privatePem = generated.match(/-----BEGIN PRIVATE KEY-----[\s\S]+?-----END PRIVATE KEY-----/)[0]
+  const publicPem = generated.match(/-----BEGIN PUBLIC KEY-----[\s\S]+?-----END PUBLIC KEY-----/)[0]
+  const device = '0123456789ABCDEF01234567'
+  fs.writeFileSync(path.join(dir, '.env'), 'SERVEX_PRIVATE_KEY="' + privatePem + '"\n')
+  const issue = (args, overrides) => execFileSync(process.execPath, [cli, ...args], {
+    encoding: 'utf8', env: { ...env, ...overrides }, stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim()
+  assert.equal(validActivation(issue([device]), device, publicPem), true)
+  fs.writeFileSync(path.join(dir, '.env'), 'SERVEX_PRIVATE_KEY=invalid\n')
+  const summaryFile = path.join(dir, 'summary.md')
+  const token = issue([device.toLowerCase(), 'Cafe [buyer](https://example.com)\n<b>'], {
+    SERVEX_PRIVATE_KEY: privatePem, GITHUB_STEP_SUMMARY: summaryFile,
+  })
+  assert.equal(validActivation(token, device, publicPem), true)
+  const summary = fs.readFileSync(summaryFile, 'utf8')
+  assert.match(summary, /Customer Name\*\* Cafe &#91;buyer&#93;/)
+  assert.ok(summary.includes('```text\n' + token + '\n```'))
+  assert.ok(summary.includes(device))
+  assert.match(summary, /Timestamp \(UTC\)\*\* \d{4}-\d{2}-\d{2}T/)
+  assert.doesNotMatch(summary, /<b>|PRIVATE KEY/)
+  assert.throws(() => issue(['DEV-8A4F-92B1'], { SERVEX_PRIVATE_KEY: privatePem }), /24-character hexadecimal/)
+  assert.throws(() => issue(['--init-keys'], { GITHUB_ACTIONS: 'true' }), /locally/)
 })

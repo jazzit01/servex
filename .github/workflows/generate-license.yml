@@ -1,0 +1,34 @@
+name: Generate ServeX License
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_id:
+        description: "Customer Device ID (24 hex characters from Activate ServeX)"
+        required: true
+        type: string
+      customer_name:
+        description: "Restaurant / Buyer Name (for your log)"
+        default: "Valued Customer"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    name: Generate activation key
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Sign the customer's Device ID
+        env:
+          SERVEX_PRIVATE_KEY: ${{ secrets.SERVEX_PRIVATE_KEY }}
+          DEVICE_ID: ${{ inputs.device_id }}
+          CUSTOMER_NAME: ${{ inputs.customer_name }}
+        run: node scripts/generate-license.js "$DEVICE_ID" "$CUSTOMER_NAME"
