@@ -88,6 +88,38 @@ CREATE TRIGGER z_reports_no_update BEFORE UPDATE ON z_reports BEGIN SELECT RAISE
 CREATE TRIGGER z_reports_no_delete BEFORE DELETE ON z_reports BEGIN SELECT RAISE(ABORT, 'Z-reports are immutable'); END;
 `
 
+const enterpriseSchema = `
+CREATE TABLE IF NOT EXISTS ingredients (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,unit TEXT NOT NULL,current_stock REAL DEFAULT 0,low_stock_threshold REAL DEFAULT 10,cost_per_unit REAL DEFAULT 0,updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS menu_recipes (id INTEGER PRIMARY KEY AUTOINCREMENT,menu_item_id INTEGER NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,ingredient_id INTEGER NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,quantity_required REAL NOT NULL,UNIQUE(menu_item_id,ingredient_id));
+CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,phone TEXT UNIQUE NOT NULL,birthday TEXT,loyalty_points REAL DEFAULT 0,total_visits INTEGER DEFAULT 0,total_spent REAL DEFAULT 0,favorite_item TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS reservations (id INTEGER PRIMARY KEY AUTOINCREMENT,table_id INTEGER REFERENCES tables(id) ON DELETE SET NULL,customer_name TEXT NOT NULL,customer_phone TEXT NOT NULL,guest_count INTEGER DEFAULT 2,reservation_time TEXT NOT NULL,status TEXT CHECK(status IN ('booked','seated','cancelled','waitlist')) DEFAULT 'booked',notes TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,order_id INTEGER);
+CREATE TABLE IF NOT EXISTS pricing_rules (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,rule_type TEXT CHECK(rule_type IN ('discount_percent','surcharge_percent')) NOT NULL,value REAL NOT NULL,category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,days_of_week TEXT DEFAULT '0,1,2,3,4,5,6',start_time TEXT NOT NULL,end_time TEXT NOT NULL,is_active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS expenses (id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT NOT NULL,amount REAL NOT NULL,payment_mode TEXT DEFAULT 'Cash',notes TEXT,recorded_by INTEGER REFERENCES users(id),created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS printers (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,role TEXT CHECK(role IN ('receipt','kitchen','bar')) NOT NULL UNIQUE,connection_type TEXT CHECK(connection_type IN ('os','usb','lan')) DEFAULT 'os',address TEXT,paper_width TEXT DEFAULT '80mm',is_active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS ingredient_movements (id INTEGER PRIMARY KEY, ingredient_id INTEGER NOT NULL REFERENCES ingredients(id), order_id INTEGER REFERENCES orders(id), quantity REAL NOT NULL, reason TEXT NOT NULL, actor INTEGER REFERENCES users(id), created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS loyalty_ledger (order_id INTEGER PRIMARY KEY REFERENCES orders(id), customer_id INTEGER NOT NULL REFERENCES customers(id), earned REAL NOT NULL, redeemed REAL NOT NULL, spent REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS reservation_lookup ON reservations(table_id,status,reservation_time);
+CREATE INDEX IF NOT EXISTS movement_orders ON ingredient_movements(order_id);
+`
+const enterpriseColumns = {
+  categories: { station: "TEXT CHECK(station IN ('kitchen','bar','none')) DEFAULT 'kitchen'" },
+  menu_items: { station: "TEXT CHECK(station IN ('kitchen','bar','none')) DEFAULT 'kitchen'" },
+  order_items: { station: "TEXT NOT NULL DEFAULT 'kitchen'", pricing_label: 'TEXT' },
+  kitchen_tickets: { station: "TEXT NOT NULL DEFAULT 'kitchen'" },
+  orders: { customer_id: 'INTEGER', loyalty_redeemed: 'REAL DEFAULT 0', is_parked: 'INTEGER DEFAULT 0' },
+  settings: { theme_mode: "TEXT DEFAULT 'light'", sound_enabled: 'INTEGER DEFAULT 1', loyalty_earn_percent: 'REAL DEFAULT 2.0' },
+}
+
+function enterpriseMigrate(db: Database) {
+  db.run(enterpriseSchema)
+  for (const [table, fields] of Object.entries(enterpriseColumns)) {
+    const columns = new Set(db.exec(`PRAGMA table_info(${table})`)[0].values.map(row => row[1]))
+    for (const [column, definition] of Object.entries(fields)) {
+      if (!columns.has(column)) db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+    }
+  }
+}
+
 export function atomicWrite(file: string, bytes: Uint8Array) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const temp = path.join(path.dirname(file), `.${randomUUID()}.tmp`)
@@ -106,7 +138,7 @@ export function hashPin(pin: string, salt: string) {
 function migrate(db: Database) {
   db.run('PRAGMA foreign_keys = ON')
   const version = Number(db.exec('PRAGMA user_version')[0].values[0][0])
-  if (version > 6) throw new Error('This database requires a newer ServeX version.')
+  if (version > 7) throw new Error('This database requires a newer ServeX version.')
   db.run('BEGIN')
   const fresh = version === 0 && !db.exec("SELECT name FROM sqlite_master WHERE name = 'settings' AND type = 'table'").length
   if (version < 1) db.run(schema + 'PRAGMA user_version = 1;')
@@ -195,6 +227,27 @@ function migrate(db: Database) {
     ))
     db.run('PRAGMA user_version = 6')
   }
+  if (version < 7) {
+    enterpriseMigrate(db)
+    db.run(`
+      WITH sample(name,unit,stock,threshold,cost) AS (VALUES
+        ('Basmati Rice','kg',12,3,95),('Chicken','kg',8,2,240),('Paneer','kg',5,1,350),
+        ('Milk','L',12,3,60),('Coffee Beans','kg',2,0.5,800))
+      INSERT INTO ingredients(name,unit,current_stock,low_stock_threshold,cost_per_unit)
+        SELECT * FROM sample WHERE NOT EXISTS (SELECT 1 FROM ingredients);
+      INSERT INTO customers(name,phone) SELECT 'Demo Guest','0000000000' WHERE NOT EXISTS(SELECT 1 FROM customers);
+      INSERT INTO pricing_rules(name,rule_type,value,category_id,start_time,end_time,is_active)
+        SELECT 'Happy Hour','discount_percent',20,(SELECT id FROM categories WHERE name='Beverages' ORDER BY id LIMIT 1),'16:00','19:00',0
+        WHERE NOT EXISTS(SELECT 1 FROM pricing_rules);
+      WITH sample(name,role) AS (VALUES ('Front Receipt','receipt'),('Kitchen KOT','kitchen'),('Bar KOT','bar'))
+      INSERT INTO printers(name,role,is_active) SELECT name,role,0 FROM sample WHERE NOT EXISTS(SELECT 1 FROM printers);
+    `)
+    if (fresh) db.run(`
+      UPDATE categories SET station='bar' WHERE name='Beverages';
+      UPDATE menu_items SET station='bar' WHERE category_id IN (SELECT id FROM categories WHERE name='Beverages');
+    `)
+    db.run('PRAGMA user_version = 7')
+  }
   db.run('COMMIT')
 }
 
@@ -271,6 +324,7 @@ export class PosDatabase {
         if (version >= 3) reference.run(v3Columns)
         if (version >= 4) reference.run(v4Schema)
         if (version >= 5) reference.run(v5Schema)
+        if (version >= 7) enterpriseMigrate(reference)
         const tables = reference.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")[0].values.flat()
         const codeObjects = "SELECT name, sql FROM sqlite_master WHERE type IN ('trigger', 'view') ORDER BY name"
         if (JSON.stringify(candidate.exec(codeObjects)) !== JSON.stringify(reference.exec(codeObjects)) ||

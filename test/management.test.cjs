@@ -1,3 +1,4 @@
+const { removeEnterprise } = require('./helpers/legacy-schema.cjs')
 const assert = require('node:assert/strict')
 const { createHash } = require('node:crypto')
 const fs = require('node:fs')
@@ -38,6 +39,7 @@ test('legacy v1 backups migrate staff PINs without losing seeded data', async t 
   const SQL = await initSqlJs()
   const old = new SQL.Database(db.bytes())
   t.after(() => old.close())
+  removeEnterprise(old)
   old.run(`DROP TABLE z_reports;
     DROP TABLE lan_requests;
     ALTER TABLE settings DROP COLUMN onboarding_completed;

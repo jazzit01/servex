@@ -30,6 +30,18 @@ const api: ServexApi = {
   voidReceipt: channel('voidReceipt'),
   printPreview: channel('printPreview'),
   toggleItem: channel('toggleItem'),
+  enterpriseData: channel('enterpriseData'),
+  customerLookup: channel('customerLookup'),
+  enterpriseAction: channel('enterpriseAction'),
+  parkOrder: channel('parkOrder'),
+  openCustomerDisplay: channel('openCustomerDisplay'),
+  publishDisplay: channel('publishDisplay'),
+  displayState: channel('displayState'),
+  onDisplay: listener => {
+    const wrapped = (_event: Electron.IpcRendererEvent, value: import('../src/types/enterprise').DisplayState) => listener(value)
+    ipcRenderer.on('pos:displayChanged',wrapped)
+    return ()=>{ipcRenderer.removeListener('pos:displayChanged',wrapped)}
+  },
   startup: channel('startup'),
   setupLogo: channel('setupLogo'),
   finishSetup: channel('finishSetup'),

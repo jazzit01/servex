@@ -1,3 +1,4 @@
+const { removeEnterprise } = require('./helpers/legacy-schema.cjs')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -26,6 +27,7 @@ test('all offline food references point at local assets and fresh menu items hav
   for (const row of db.all('SELECT image_path FROM menu_items')) assert.ok(foodIdFromReference(row.image_path))
   const engine = await initSqlJs()
   const old = new engine.Database(db.bytes())
+  removeEnterprise(old)
   old.run(`UPDATE menu_items SET image_path=NULL WHERE id IN (1,3);
     UPDATE menu_items SET image_path='custom.png' WHERE id=2;
     UPDATE menu_items SET name='New dish' WHERE id=3;

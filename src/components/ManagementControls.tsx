@@ -21,7 +21,7 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 const modalStack: HTMLDialogElement[] = []
 
-export function Modal({ title, onClose, children, compact, wide, dismissLabel = 'Cancel', dismissDisabled = false }: { title: string; onClose: () => void; children: ReactNode; compact?: boolean; wide?: boolean; dismissLabel?: string; dismissDisabled?: boolean }) {
+export function Modal({ title, onClose, children, compact, wide, drawer, palette, dismissLabel = 'Cancel', dismissDisabled = false }: { title: string; onClose: () => void; children: ReactNode; compact?: boolean; wide?: boolean; drawer?: boolean; palette?: boolean; dismissLabel?: string; dismissDisabled?: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const toast = usePosStore(state => state.toast)
   const dismiss = useRef({ onClose, dismissDisabled })
@@ -49,7 +49,7 @@ export function Modal({ title, onClose, children, compact, wide, dismissLabel = 
     event.stopPropagation()
     if (!dismissDisabled && modalStack.at(-1) === event.currentTarget) onClose()
   }}
-    className={`panel max-h-[90vh] max-w-[90vw] overflow-auto p-0 backdrop:bg-slate-950/40 ${wide ? 'w-[768px] max-w-3xl' : compact ? 'w-[420px]' : 'w-[480px]'}`}>
+    className={`panel max-h-[90vh] max-w-[90vw] overflow-auto p-0 backdrop:bg-slate-950/40 ${drawer ? 'fixed inset-y-3 right-3 left-auto ml-auto mr-0 h-fit w-[520px]' : palette ? 'w-[576px] max-w-xl' : wide ? 'w-[768px] max-w-3xl' : compact ? 'w-[420px]' : 'w-[480px]'}`}>
     <div className="flex items-center justify-between border-b px-5 py-4">
       <h2>{title}</h2><button className="secondary p-1.5" type="button" aria-label="Close dialog" disabled={dismissDisabled} onClick={onClose}><X size={16} /></button>
     </div>

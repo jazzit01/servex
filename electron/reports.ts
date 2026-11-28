@@ -78,7 +78,8 @@ export class Reports {
         COALESCE(SUM(CASE WHEN e.sign = -1 THEN ROUND(o.grand_total*100) ELSE 0 END),0) AS refunds
       FROM events e JOIN orders o ON o.id=e.order_id WHERE o.payment_mode = 'Cash' AND date(e.stamp,'localtime') = ?`, [day])[0]
     const saved = this.db.all<{ content: string }>('SELECT content FROM z_reports WHERE day = ?', [day])[0]
-    return { day, cashSales: cash.sales / 100, refunds: cash.refunds / 100,
+    const cashExpenses = this.db.all<{ amount:number }>("SELECT COALESCE(SUM(amount),0) AS amount FROM expenses WHERE payment_mode='Cash' AND date(created_at,'localtime')=?",[day])[0].amount
+    return { day, cashExpenses, cashSales: cash.sales / 100, refunds: cash.refunds / 100,
       report: saved ? JSON.parse(saved.content) as ZReport : null,
       legacyClosed: Boolean(this.db.all(`SELECT id FROM audit_logs WHERE ${closedDay} AND details = ?`, [day]).length) }
   }
@@ -87,7 +88,7 @@ export class Reports {
     const current = this.zState()
     if (current.report) return current.report
     if (current.legacyClosed) throw new Error('This business day was already closed.')
-    if (this.db.all("SELECT id FROM orders WHERE status IN ('open','billed') LIMIT 1").length) throw new Error('Settle open orders before closing the day.')
+    if (this.db.all("SELECT id FROM orders WHERE status IN ('open','billed') AND COALESCE(is_parked,0)=0 LIMIT 1").length) throw new Error('Settle open orders before closing the day.')
     const cents = (amount: number) => {
       if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0 || amount > 100000000) throw new Error('Enter valid cash amounts.')
       return Math.round(amount * 100)
@@ -97,11 +98,11 @@ export class Reports {
     const opening = cents(input.opening)
     const coins = cents(input.coins)
     const actual = coins + input.counts.reduce((sum, value, i) => sum + value * denominations[i] * 100, 0)
-    const expected = opening + Math.round(current.cashSales * 100) - Math.round(current.refunds * 100)
+    const expected = opening + Math.round(current.cashSales * 100) - Math.round(current.refunds * 100) - Math.round(current.cashExpenses * 100)
     const analytics = this.analytics({ from: current.day, to: current.day })
     const brand = this.db.all<{ currency_symbol: string; restaurant_name: string }>('SELECT currency_symbol, restaurant_name FROM settings WHERE id=1')[0]
     const report: ZReport = { day: current.day, actor: actor.name, opening: opening / 100, cashSales: current.cashSales,
-      refunds: current.refunds, actual: actual / 100, expected: expected / 100, variance: (actual - expected) / 100,
+      refunds: current.refunds, cashExpenses: current.cashExpenses, actual: actual / 100, expected: expected / 100, variance: (actual - expected) / 100,
       counts: input.counts, coins: coins / 100, currency: brand.currency_symbol, restaurant: brand.restaurant_name,
       payments: analytics.payments, orderCount: analytics.count, sales: analytics.sales, tax: analytics.tax }
     this.db.transaction(sql => {

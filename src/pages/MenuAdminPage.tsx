@@ -1,3 +1,4 @@
+import type { Station } from '../types/enterprise'
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Download, Images, ImagePlus, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react'
 import FoodLibraryPicker from '../components/FoodLibraryPicker'
@@ -23,7 +24,7 @@ function ItemEditor({ item, categories, selected, defaultTax, onClose, onSave, b
       if (isBusy) return
       const form = new FormData(event.currentTarget)
       void onSave({ id: item?.id, categoryId: Number(form.get('category')), name: String(form.get('name')),
-        price: Number(form.get('price')), tax: Number(form.get('tax')), veg, available, imagePath })
+        price: Number(form.get('price')), tax: Number(form.get('tax')), veg, available, imagePath, station:(String(form.get('station'))||undefined) as Station|undefined })
     }}>
       <Field label="Item Name"><input name="name" className="field" required maxLength={120} defaultValue={item?.name} /></Field>
       <Field label="Category"><select className="field" name="category" required defaultValue={item?.category_id ?? (selected || categories[0]?.id)}>
@@ -33,6 +34,9 @@ function ItemEditor({ item, categories, selected, defaultTax, onClose, onSave, b
         <Field label="Price"><input className="field" name="price" type="number" min={0} max={1000000} step="0.01" required defaultValue={item?.price} /></Field>
         <Field label="Tax Slab %"><input className="field" name="tax" type="number" min={0} max={100} step="0.01" required defaultValue={item?.tax_slab ?? defaultTax} /></Field>
       </div>
+      <Field label="Prep station"><select className="field" name="station" defaultValue={item?.station??''}>
+        {!item&&<option value="">Use category station</option>}<option value="kitchen">Kitchen</option><option value="bar">Bar</option><option value="none">No ticket</option>
+      </select></Field>
       <div className="flex gap-4 text-sm">
         <span className="flex items-center gap-2"><Switch checked={veg} onChange={setVeg} label="Vegetarian" disabled={isBusy} /> {veg ? 'Vegetarian' : 'Non-vegetarian'}</span>
         <span className="flex items-center gap-2"><Switch checked={available} onChange={setAvailable} label="In stock" disabled={isBusy} /> In stock</span>
@@ -122,9 +126,12 @@ export default function MenuAdminPage() {
               event.preventDefault()
               const form = new FormData(event.currentTarget)
               if (await act(() => window.servexApi.saveCategory({
-                id: categoryForm?.id, name: String(form.get('name')), active: form.has('active'),
+                id: categoryForm?.id, name: String(form.get('name')), active: form.has('active'), station:String(form.get('station')) as Station,
               }), 'Category saved.')) editCategory(null)
             }}><Field label={categoryForm ? 'Edit category' : 'New category'}><input className="field" autoFocus name="name" required maxLength={80} defaultValue={categoryForm?.name} /></Field>
+              <Field label="Default prep station"><select className="field" name="station" defaultValue={categoryForm?.station??'kitchen'}>
+                <option value="kitchen">Kitchen</option><option value="bar">Bar</option><option value="none">No ticket</option>
+              </select></Field>
               <label className="flex items-center gap-2 text-sm"><input name="active" type="checkbox" defaultChecked={!categoryForm || Boolean(categoryForm.is_active)} /> Active</label>
               <div className="flex gap-2"><button className="primary" disabled={busy}>Save</button>
                 <button className="secondary" type="button" disabled={busy} onClick={() => editCategory(null)}>Cancel</button></div>

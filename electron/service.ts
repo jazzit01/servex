@@ -1,3 +1,5 @@
+import { Enterprise, postPayment, redeemAmount, reversePayment } from './enterprise'
+import { priceAt } from '../src/types/scheduledPricing'
 import type { Database } from 'sql.js'
 import { closedDay } from './reports'
 import { nameOf } from './catalog'
@@ -10,8 +12,8 @@ import type {
   BillSplit, CheckoutPayment, KitchenTicket, TableMerge, TableStatusUpdate, TableTransfer,
 } from '../src/types/pos'
 
-export const orderColumns = 'id, bill_number, table_id, order_type, status, subtotal, tax_amount, grand_total, revision, customer_name, customer_phone, guest_count, discount_amount, discount_percent, created_at, closed_at, payment_mode, cash_tendered, change_returned'
-const active = "status IN ('open','billed')"
+export const orderColumns = 'id, bill_number, table_id, order_type, status, subtotal, tax_amount, grand_total, revision, customer_name, customer_phone, guest_count, discount_amount, discount_percent, created_at, closed_at, payment_mode, cash_tendered, change_returned, is_parked, loyalty_redeemed, customer_id'
+const active = "status IN ('open','billed') AND COALESCE(is_parked,0)=0"
 type StoredLine = OrderItem & { net_minor: number; tax_minor: number; tax_rate_snapshot: number | null; tax_inclusive_snapshot: number | null }
 
 function audit(sql: Database, actor: number, action: string, entity: 'table' | 'order', id: number, details: object) {
@@ -104,6 +106,8 @@ export class FloorService {
     const config = this.db.all<{ tax_inclusive: number; tax_rate: number }>('SELECT tax_inclusive, tax_rate FROM settings WHERE id = 1')[0]
     const inclusive = Boolean(config.tax_inclusive)
     const seen = new Set<number>()
+    const rules = new Enterprise(this.db).pricing()
+    const now = new Date()
     return items.map(row => {
       if (!row || !Number.isInteger(row.id) || !Number.isInteger(row.quantity) || row.quantity < 1 || row.quantity > 99 || seen.has(row.id)) {
         throw new Error('An item or quantity is invalid.')
@@ -113,15 +117,16 @@ export class FloorService {
         WHERE m.id = ? AND m.is_available = 1 AND c.is_active = 1 AND m.archived = 0`, [row.id])[0]
       if (!item) throw new Error('A menu item is no longer available.')
       const rate = item.tax_slab ?? config.tax_rate ?? 5
-      const { gross, tax } = lineAmounts(item.price, row.quantity, rate, inclusive)
-      return { item, quantity: row.quantity, gross, tax, net: inclusive ? gross - tax : gross, rate, inclusive, notes: optionalText(row.notes ?? '', 240) }
+      const priced = priceAt(item.price, item.category_id, rules, now)
+      const { gross, tax } = lineAmounts(priced.price, row.quantity, rate, inclusive)
+      return { item, priced, quantity: row.quantity, gross, tax, net: inclusive ? gross - tax : gross, rate, inclusive, notes: optionalText(row.notes ?? '', 240) }
     })
   }
 
   private insertLines(sql: Database, orderId: number, lines: ReturnType<FloorService['menuLines']>) {
-    for (const { item, quantity, gross, tax, net, rate, inclusive, notes } of lines) {
-      sql.run(`INSERT INTO order_items (order_id, menu_item_id, item_name, unit_price, quantity, notes, line_total, net_minor, tax_minor, tax_rate_snapshot, tax_inclusive_snapshot)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [orderId, item.id, item.name, item.price, quantity, notes, gross / 100, net, tax, rate, Number(inclusive)])
+    for (const { item, priced, quantity, gross, tax, net, rate, inclusive, notes } of lines) {
+      sql.run(`INSERT INTO order_items (order_id, menu_item_id, item_name, unit_price, quantity, notes, line_total, net_minor, tax_minor, tax_rate_snapshot, tax_inclusive_snapshot, station, pricing_label)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [orderId, item.id, item.name, priced.price, quantity, notes, gross / 100, net, tax, rate, Number(inclusive), item.station ?? 'kitchen', priced.label])
     }
   }
 
@@ -136,6 +141,7 @@ export class FloorService {
 
   createOrder(input: OrderInput, actor: number, mobile?: { key: string; hash: string }) {
     if (!input || !['dinein', 'parcel', 'room'].includes(input.type)) throw new Error('Choose a valid order type.')
+    if (mobile && (input.parked || input.reservationId !== undefined)) throw new Error('Hold and reservation actions are available at the till.')
     const tableId = input.type === 'parcel' ? null : input.tableId
     if (input.type !== 'parcel') {
       const table = tableId === null ? null : this.table(tableId)
@@ -145,21 +151,38 @@ export class FloorService {
     if (this.db.all(`SELECT id FROM audit_logs WHERE ${closedDay} AND details = date('now','localtime')`).length) {
       throw new Error('The business day is closed.')
     }
+    const reserved = tableId === null ? undefined : this.db.all<{id:number}>("SELECT id FROM reservations WHERE table_id=? AND status='seated' AND order_id IS NULL",[tableId])[0]
+    if (reserved?.id !== input.reservationId) throw new Error('Open this guest’s seated reservation before starting the order.')
     const lines = this.menuLines(input.items)
     const guest = guestDetails(input.guestName ?? '', input.guestCount ?? null)
+    if (input.parked !== undefined && typeof input.parked !== 'boolean') throw new Error('Invalid hold request.')
     return this.db.transaction(sql => {
-      sql.run('INSERT INTO orders (table_id, order_type, created_by, customer_name, guest_count, customer_phone) VALUES (?, ?, ?, ?, ?, ?)',
-        [tableId, input.type, actor, guest.name, guest.count, optionalText(input.phone ?? '', 32)])
+      sql.run('INSERT INTO orders (table_id, order_type, created_by, customer_name, guest_count, customer_phone, is_parked) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [tableId, input.type, actor, guest.name, guest.count, optionalText(input.phone ?? '', 32), Number(Boolean(input.parked))])
       const id = Number(sql.exec('SELECT last_insert_rowid()')[0].values[0][0])
       sql.run('UPDATE orders SET bill_number = ? WHERE id = ?', [`SX-${String(id).padStart(5, '0')}`, id])
       this.insertLines(sql, id, lines)
       this.recalculate(sql, { id, discount_amount: 0 })
-      if (tableId !== null) sql.run("UPDATE tables SET status = 'occupied' WHERE id = ?", [tableId])
+      if (!input.parked && tableId !== null) {
+        sql.run("UPDATE tables SET status = 'occupied' WHERE id = ?", [tableId])
+      }
+      if (reserved) sql.run('UPDATE reservations SET order_id=? WHERE id=?',[id,reserved.id])
       if (mobile) {
         sql.run('INSERT INTO lan_requests (request_id,payload,order_id) VALUES (?,?,?)', [mobile.key, mobile.hash, id])
         audit(sql, actor, 'MOBILE_ORDER', 'order', id, { channel: 'LAN' })
       }
       return id
+    })
+  }
+
+  parkOrder(id: number, revision: number, actor: number) {
+    const order = this.activeOrder(id,revision)
+    if (order.status !== 'open' || this.lines(id).some(line=>line.kot_printed)) throw new Error('Only unsent open orders can be parked.')
+    if (order.table_id !== null) this.requireLocation(order,order.table_id)
+    this.db.transaction(sql=>{
+      sql.run('UPDATE orders SET is_parked=1,revision=revision+1 WHERE id=?',[id])
+      if (order.table_id !== null) sql.run("UPDATE tables SET status='vacant' WHERE id=?",[order.table_id])
+      audit(sql,actor,'PARK_ORDER','order',id,{})
     })
   }
 
@@ -227,7 +250,7 @@ export class FloorService {
           useLegacy ? Math.round(line.tax_minor * ratio) : tax, useLegacy ? null : rate, useLegacy ? null : Number(inclusive), line.id])
       }
       if (input.inclusive !== undefined) for (const line of added) {
-        const { gross, tax } = lineAmounts(line.item.price, line.quantity, line.rate, input.inclusive)
+        const { gross, tax } = lineAmounts(line.priced.price, line.quantity, line.rate, input.inclusive)
         Object.assign(line, { gross, tax, inclusive: input.inclusive, net: gross - (input.inclusive ? tax : 0) })
       }
       this.insertLines(sql, order.id, added)
@@ -289,17 +312,22 @@ export class FloorService {
   sendKot(id: number, revision: number, actor: number) {
     const order = this.activeOrder(id, revision)
     const table = order.table_id === null ? null : this.requireLocation(order, order.table_id)
-    const pending = this.lines(id).filter(line => !line.kot_printed)
-    if (!pending.length) throw new Error('There are no unsent kitchen items.')
-    const lines = pending.map(line => ({ name: line.item_name, quantity: line.quantity, notes: line.notes }))
+    const pending = this.lines(id).filter(line => !line.kot_printed && line.station !== 'none')
+    if (!pending.length) throw new Error('There are no unsent kitchen or bar items.')
     return this.db.transaction(sql => {
-      sql.run('INSERT INTO kitchen_tickets (order_id, reference, lines) VALUES (?, ?, ?)',
-        [id, table?.label ?? order.bill_number, JSON.stringify(lines)])
-      const ticketId = Number(sql.exec('SELECT last_insert_rowid()')[0].values[0][0])
+      const tickets: number[] = []
+      for (const station of ['kitchen','bar'] as const) {
+        const rows = pending.filter(line => (line.station ?? 'kitchen') === station)
+        if (!rows.length) continue
+        const lines = rows.map(line => ({ name: line.item_name, quantity: line.quantity, notes: line.notes }))
+        sql.run('INSERT INTO kitchen_tickets (order_id, reference, lines, station) VALUES (?, ?, ?, ?)',
+          [id, table?.label ?? order.bill_number, JSON.stringify(lines),station])
+        tickets.push(Number(sql.exec('SELECT last_insert_rowid()')[0].values[0][0]))
+      }
       for (const line of pending) sql.run('UPDATE order_items SET kot_printed = 1 WHERE id = ?', [line.id])
       this.reopen(sql, order)
-      audit(sql, actor, 'SEND_KOT', 'order', id, { ticketId, lineIds: pending.map(line => line.id) })
-      return ticketId
+      audit(sql, actor, 'SEND_KOT', 'order', id, { tickets, lineIds: pending.map(line => line.id) })
+      return tickets
     })
   }
 
@@ -308,10 +336,10 @@ export class FloorService {
     this.db.write("UPDATE kitchen_tickets SET status = 'ready' WHERE id = ?", [id])
   }
 
-  receiptParts(order: Order, split: BillSplit) {
+  receiptParts(order: Order, split: BillSplit, redeemed = 0) {
     return splitReceipt(this.lines(order.id).map(line => ({ id: line.id, name: line.item_name, quantity: line.quantity,
       notes: line.notes, net: line.net_minor, tax: line.tax_minor })), Math.round(order.subtotal * 100),
-      Math.round(order.tax_amount * 100), Math.round(order.discount_amount * 100), split)
+      Math.round(order.tax_amount * 100), Math.round((order.discount_amount + redeemed) * 100), split)
   }
 
   settle(input: CheckoutPayment, actor: number, receipt: (order: Order, parts: ReturnType<FloorService['receiptParts']>) => string) {
@@ -319,21 +347,23 @@ export class FloorService {
     if (!['Cash', 'Card', 'UPI', 'Room Folio'].includes(input.mode) ||
         (input.mode === 'Room Folio' && (order.order_type !== 'room' || !order.customer_name || !order.customer_phone))) throw new Error('Choose a valid payment method. Room folios require the guest name and phone.')
     if (order.table_id !== null) this.requireLocation(order, order.table_id)
-    const due = Math.round(order.grand_total * 100)
+    const redeemed = redeemAmount(this.db,order.customer_phone,input.redeem,order.grand_total)
+    const due = Math.round((order.grand_total - redeemed) * 100)
     const tender = input.mode === 'Cash' ? Math.round(Number(input.tendered) * 100) : 0
     if (!Number.isSafeInteger(tender) || (input.mode === 'Cash' && (tender < due || tender > 100000000000))) throw new Error('Cash tendered must cover the amount due.')
-    const parts = this.receiptParts(order, input.split)
+    const parts = this.receiptParts(order, input.split, redeemed)
     const config = this.db.all<{ auto_cleaning: number }>('SELECT auto_cleaning FROM settings WHERE id = 1')[0]
     return this.db.transaction(sql => {
       const day = String(sql.exec("SELECT strftime('%Y%m%d','now','localtime')")[0].values[0][0])
       sql.run('INSERT INTO bill_sequences (day, last_number) VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET last_number = last_number + 1', [day])
       const number = Number(sql.exec('SELECT last_number FROM bill_sequences WHERE day = ?', [day])[0].values[0][0])
-      const paid = { ...order, bill_number: `SVX-${day}-${String(number).padStart(4, '0')}`, payment_mode: input.mode,
+      const paid = { ...order, grand_total: due / 100, loyalty_redeemed: redeemed, discount_amount: Math.round((order.discount_amount + redeemed)*100)/100, bill_number: `SVX-${day}-${String(number).padStart(4, '0')}`, payment_mode: input.mode,
         cash_tendered: tender / 100, change_returned: input.mode === 'Cash' ? (tender - due) / 100 : 0 }
       const document = receipt(paid, parts)
       sql.run(`UPDATE orders SET status = 'paid', payment_mode = ?, cash_tendered = ?, change_returned = ?, bill_number = ?,
-        receipt_json = ?, closed_at = CURRENT_TIMESTAMP, revision = revision + 1 WHERE id = ?`,
-      [input.mode, paid.cash_tendered, paid.change_returned, paid.bill_number, document, order.id])
+        receipt_json = ?, grand_total=?, discount_amount=?, loyalty_redeemed=?, closed_at = CURRENT_TIMESTAMP, revision = revision + 1 WHERE id = ?`,
+      [input.mode, paid.cash_tendered, paid.change_returned, paid.bill_number, document, paid.grand_total, paid.discount_amount, redeemed, order.id])
+      postPayment(sql,paid,redeemed,actor)
       if (order.table_id !== null) sql.run('UPDATE tables SET status = ? WHERE id = ?', [config.auto_cleaning ? 'cleaning' : 'vacant', order.table_id])
       audit(sql, actor, 'COMPLETE_PAYMENT', 'order', order.id, { bill: paid.bill_number, mode: input.mode, splits: parts.length })
       return document
@@ -357,6 +387,7 @@ export class FloorService {
     }
     this.db.transaction(sql => {
       sql.run("UPDATE orders SET status = 'void', revision = revision + 1 WHERE id = ?", [id])
+      reversePayment(sql,id,actor)
       audit(sql, actor, 'VOID_RECEIPT', 'order', id, { bill: order.bill_number, amount: order.grand_total, mode: order.payment_mode })
     })
   }
@@ -365,7 +396,7 @@ export class FloorService {
     const order = this.activeOrder(input.orderId)
     const from = this.requireLocation(order, input.fromTableId)
     const to = this.table(input.toTableId)
-    if (!to || to.status !== 'vacant' || this.atLocation(to.id).length) throw new Error('The destination is no longer vacant.')
+    if (!to || to.status !== 'vacant' || this.atLocation(to.id).length || this.db.all("SELECT id FROM reservations WHERE table_id=? AND status='seated' AND order_id IS NULL",[to.id]).length) throw new Error('The destination is no longer vacant.')
     this.db.transaction(sql => {
       sql.run('UPDATE orders SET table_id = ?, order_type = ?, revision = revision + 1 WHERE id = ?',
         [to.id, to.type === 'room' ? 'room' : 'dinein', order.id])

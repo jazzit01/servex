@@ -37,7 +37,7 @@ test('cash reconciliation records reversals and closes the drawer immutably', as
   assert.equal(analytics.sales, 357)
   assert.equal(analytics.tax, 17)
   assert.deepEqual(analytics.items.map(row => row.name), ['Chicken Tikka'])
-  assert.deepEqual(reports.zState(), { day, cashSales: 651, refunds: 294, report: null, legacyClosed: false })
+  assert.deepEqual(reports.zState(), { day, cashExpenses: 0, cashSales: 651, refunds: 294, report: null, legacyClosed: false })
   const input = { opening: 100, counts: [0, 0, 2, 0, 1, 0, 0], coins: 7 }
   const close = reports.close(input, { id: 1, name: 'Admin' })
   assert.equal(close.expected, 457)

@@ -1,3 +1,4 @@
+import Expenses from '../components/enterprise/Expenses'
 import { useEffect, useState } from 'react'
 import { ArrowLeft, BarChart3, CalendarDays, Download, ReceiptText, ShieldCheck } from 'lucide-react'
 import { Field, Modal } from '../components/ManagementControls'
@@ -67,7 +68,7 @@ function ZClose({ z, reload, money }: { z: ZState; reload: () => Promise<void>; 
   const [busy, setBusy] = useState(false)
   const [confirmClose, setConfirmClose] = useState(false)
   const counted = counts.reduce((sum, count, i) => sum + Number(count) * denominations[i] * 100, Math.round(Number(coins) * 100)) / 100
-  const expected = (Math.round(Number(opening) * 100) + Math.round(z.cashSales * 100) - Math.round(z.refunds * 100)) / 100
+  const expected = (Math.round(Number(opening) * 100) + Math.round(z.cashSales * 100) - Math.round(z.refunds * 100) - Math.round((z.cashExpenses??0)*100)) / 100
   const variance = z.report?.variance ?? Math.round((counted - expected) * 100) / 100
   const requiresPin = !z.report && cashier?.role === 'cashier'
   async function submitClose() {
@@ -93,6 +94,7 @@ function ZClose({ z, reload, money }: { z: ZState; reload: () => Promise<void>; 
       <dl className="space-y-2 text-sm">
         <div className="flex justify-between"><dt>Cash sales</dt><dd>{money(z.report?.cashSales ?? z.cashSales)}</dd></div>
         <div className="flex justify-between"><dt>Cash refunds</dt><dd>{money(z.report?.refunds ?? z.refunds)}</dd></div>
+        <div className="flex justify-between"><dt>Cash expenses</dt><dd>{money(z.report?.cashExpenses??z.cashExpenses??0)}</dd></div>
         <div className="flex justify-between border-t pt-2 font-bold"><dt>Expected Cash in Drawer</dt><dd>{money(z.report?.expected ?? expected)}</dd></div>
         <div className="flex justify-between font-bold"><dt>Actual Cash Counted</dt><dd>{money(z.report?.actual ?? counted)}</dd></div>
         <div className={`flex justify-between rounded-lg p-3 font-bold ${variance < 0 ? 'bg-rose-50 text-rose-800' : 'bg-emerald-50 text-emerald-800'}`}>
@@ -129,7 +131,12 @@ export default function ReportsPage() {
   const today = data?.businessDate ?? ''
   const [range, setRange] = useState<DateRange>({ from: today, to: today })
   const [active, setActive] = useState(range)
-  const [tab, setTab] = useState<'analytics' | 'close' | 'audit'>('analytics')
+  const [tab, setTab] = useState<'analytics' | 'close' | 'audit' | 'expenses'>(()=>usePosStore.getState().reportTab)
+  useEffect(()=>{
+    function closeDay(){setTab('close')}
+    window.addEventListener('servex:open-z-close',closeDay)
+    return()=>window.removeEventListener('servex:open-z-close',closeDay)
+  },[])
   const [analytics, setAnalytics] = useState<Analytics>()
   const [z, setZ] = useState<ZState>()
   const [audit, setAudit] = useState<AuditEntry[]>([])
@@ -147,7 +154,7 @@ export default function ReportsPage() {
         .catch(cause => { if (current) setError(cause.message) })
     } else if (tab === 'close') {
       void window.servexApi.getZReport().then(value => { if (current) setZ(value) }).catch(cause => { if (current) setError(cause.message) })
-    } else {
+    } else if(tab==='audit') {
       setAudit([])
       setMore(false)
       setAuditBusy(true)
@@ -169,11 +176,12 @@ export default function ReportsPage() {
     <div className="flex items-end justify-between gap-4"><div><h1>Reports &amp; Z-Close</h1><p className="subtitle">Sales, cash reconciliation, and sensitive activity.</p></div></div>
     <div className="flex flex-wrap gap-2">
       <button className={tab === 'analytics' ? 'primary' : 'secondary'} onClick={() => setTab('analytics')}><BarChart3 size={16} /> Analytics</button>
+      <button className={tab === 'expenses' ? 'primary' : 'secondary'} onClick={()=>setTab('expenses')}>Expenses / Petty Cash</button>
       <button className={tab === 'close' ? 'primary' : 'secondary'} onClick={() => setTab('close')}><ReceiptText size={16} /> Z-Close</button>
       {cashier?.role !== 'cashier' && <button className={tab === 'audit' ? 'primary' : 'secondary'} onClick={() => setTab('audit')}><ShieldCheck size={16} /> Audit Logs</button>}
     </div>
     {tab !== 'analytics' && <button className="secondary h-10" onClick={() => setTab('analytics')}><ArrowLeft size={16} /> Back to Analytics</button>}
-    {tab !== 'close' && <form className="panel flex flex-wrap items-end gap-3 p-3" onSubmit={event => { event.preventDefault(); setActive({ ...range }) }}>
+    {(tab === 'analytics' || tab === 'audit') && <form className="panel flex flex-wrap items-end gap-3 p-3" onSubmit={event => { event.preventDefault(); setActive({ ...range }) }}>
       <Field label="From"><input className="field" type="date" required value={range.from} onChange={event => setRange({ ...range, from: event.target.value })} /></Field>
       <Field label="To"><input className="field" type="date" required value={range.to} onChange={event => setRange({ ...range, to: event.target.value })} /></Field>
       <button className="primary"><CalendarDays size={16} /> Apply Range</button>
@@ -186,6 +194,7 @@ export default function ReportsPage() {
     {error && <p className="panel p-4 text-sm text-red-800" role="alert">{error}</p>}
     {tab === 'analytics' && (analytics ? <AnalyticsView report={analytics} money={money} /> : !error && <p className="caption">Loading sales…</p>)}
     {tab === 'close' && (z ? <ZClose z={z} reload={async () => setZ(await window.servexApi.getZReport())} money={money} /> : !error && <p className="caption">Loading drawer figures…</p>)}
+    {tab === 'expenses' && <Expenses/>}
     {tab === 'audit' && <section className="panel overflow-hidden">
       <div className="flex items-end justify-between p-4"><Field label="Action"><select className="field" value={action} disabled={auditBusy} onChange={event => setAction(event.target.value)}>
         <option value="">All recorded actions</option>{['VOID_KOT_ITEM','BILL_VOID','HIGH_DISCOUNT','TABLE_MERGE','TABLE_TRANSFER','Z_CLOSE','MOBILE_ORDER'].map(value => <option key={value}>{value}</option>)}

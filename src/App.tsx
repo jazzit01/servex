@@ -1,3 +1,6 @@
+import CustomerDisplayPage from './pages/CustomerDisplayPage'
+import CrmPage from './pages/CrmPage'
+import InventoryPage from './pages/InventoryPage'
 import { useEffect, useState } from 'react'
 import PinLogin from './components/auth/PinLoginModal'
 import SetupAccess from './components/auth/SetupAccess'
@@ -14,10 +17,14 @@ import ReportsPage from './pages/ReportsPage'
 import SettingsPage from './pages/SettingsPage'
 import { usePosStore } from './store/usePosStore'
 
-const pages = { floor: FloorMapPage, billing: BillingPage, orders: OrdersKotPage, menu: MenuAdminPage, reports: ReportsPage, settings: SettingsPage }
+const pages = { floor: FloorMapPage, billing: BillingPage, orders: OrdersKotPage, menu: MenuAdminPage, reports: ReportsPage, settings: SettingsPage, crm:CrmPage, inventory:InventoryPage }
 
-export default function App() {
-  const { cashier, route, startOrder, navigate, billingSession, toast } = usePosStore()
+export default function App(){
+  return location.hash === '#/customer-display' ? <CustomerDisplayPage/> : <PosApp/>
+}
+
+function PosApp() {
+  const { cashier, data, route, startOrder, navigate, billingSession, toast } = usePosStore()
   const [startup, setStartup] = useState<StartupState>()
   const [activation, setActivation] = useState(false)
   const [dismissedActivation, setDismissedActivation] = useState(false)
@@ -65,6 +72,11 @@ export default function App() {
     window.addEventListener('keydown', shortcuts)
     return () => window.removeEventListener('keydown', shortcuts)
   }, [cashier, navigate, startOrder, route, startup?.license.mode])
+  const theme=data?.settings.theme_mode
+  useEffect(()=>{
+    if(theme) { setStartup(previous=>previous&&previous.theme!==theme?{...previous,theme}:previous); return }
+    if(!cashier&&startup?.theme)document.documentElement.classList.toggle('dark',startup.theme==='dark')
+  },[cashier,startup?.theme,theme])
   if (!startup) return <div className="grid h-screen place-items-center text-sm text-slate-600">{startupError || 'Opening ServeX…'}</div>
   if (profile || (startup.onboarding && !deferredSetup)) return <SetupWizard profile={profile} cancel={cancelSetup} complete={completeSetup} />
   const expired = startup.license.mode === 'expired'

@@ -1,3 +1,4 @@
+import ReservationsDrawer from '../components/enterprise/ReservationsDrawer'
 import { useEffect, useRef, useState } from 'react'
 import { Move, Plus, Save } from 'lucide-react'
 import LocationCard, { statusVisuals } from '../components/floor/LocationCard'
@@ -31,6 +32,7 @@ export default function FloorMapPage() {
   const [busy, setBusy] = useState(false)
   const [actionId, setActionId] = useState<number | null>(null)
   const [drafts, setDrafts] = useState<Record<number, FloorTable>>({})
+  const [reservations,setReservations]=useState(false)
   const nextDraft = useRef(-1)
   const [clock, setClock] = useState(Date.now)
   const dirty = Object.keys(drafts).length > 0
@@ -42,6 +44,15 @@ export default function FloorMapPage() {
     const timer = setInterval(() => setClock(Date.now()), 10000)
     return () => clearInterval(timer)
   }, [])
+  useEffect(()=>{
+    const focus=()=>{
+      const target=usePosStore.getState().floorTarget
+      if(target!==null){setActionId(target);usePosStore.setState({floorTarget:null})}
+    }
+    focus()
+    window.addEventListener('servex:focus-location',focus)
+    return()=>window.removeEventListener('servex:focus-location',focus)
+  },[])
   if (!data) return null
   const zones = zoneId === null ? data.zones : data.zones.filter(zone => zone.id === zoneId)
   const draftRows = Object.values(drafts)
@@ -73,6 +84,7 @@ export default function FloorMapPage() {
   return <div className="workspace">
     <div className="flex items-end justify-between gap-4">
       <div><h1>Floors &amp; Rooms</h1><p className="subtitle">{activeLocations.length} active · {locations.length} locations</p></div>
+      {!editing&&<button className="secondary h-9" onClick={()=>setReservations(true)}>Reservations &amp; Waitlist</button>}
       {editing && <div className="flex items-center gap-2">
         <button className="secondary h-9" disabled={busy || !data.zones.length} onClick={() => setAdding(true)}><Plus size={16} /> Add Table / Room</button>
         <button className="primary h-9" disabled={busy || !draftRows.length} onClick={() => void save()}><Save size={16} /> Save Layout</button>
@@ -114,7 +126,7 @@ export default function FloorMapPage() {
               {rows.map(table => <LocationCard key={table.id} location={table} order={activeOrders.get(table.id)}
                 editing={editing} disabled={busy} now={clock} currency={data.settings.currency_symbol}
                 onClick={() => table.status === 'vacant' && !activeOrders.has(table.id)
-                  ? startOrder(table.type === 'room' ? 'room' : 'dinein', table.id)
+                  ? startOrder(table.type === 'room' ? 'room' : 'dinein', table.id,data.seated.find(row=>row.table_id===table.id))
                   : setActionId(table.id)}
                 onLayout={rect => setDrafts(previous => ({ ...previous, [table.id]: { ...table, ...rect } }))} />)}
               {!rows.length && <p className="p-6 text-sm text-slate-500">No locations in this zone.</p>}
@@ -124,6 +136,7 @@ export default function FloorMapPage() {
       })}
       {!zones.length && <p className="p-6 text-sm text-slate-500">Create a zone in Settings to start placing locations.</p>}
     </div>
+    {reservations && <ReservationsDrawer close={()=>setReservations(false)}/>}
     {current && <TableActions key={current.id} location={current} order={activeOrders.get(current.id)} data={data} onClose={() => setActionId(null)} />}
     {adding && <Modal compact title="Add Table / Room" onClose={() => setAdding(false)}>
       <form className="space-y-4" onSubmit={event => {

@@ -20,3 +20,26 @@
   .field { @apply w-full rounded-lg border bg-white px-3 py-2 text-sm; }
   .caption { @apply text-xs font-medium text-slate-500; }
 }
+
+/* Keep legacy screens and modal content on the same semantic night-shift palette. */
+.dark { color-scheme: dark; }
+.dark body { @apply bg-slate-950 text-slate-100; }
+.dark *, .dark [class*="divide-"] > :not([hidden]) ~ :not([hidden]) { border-color: #334155; }
+.dark :is(.panel,.secondary,.field,.bg-white,.bg-white\/80,.bg-white\/95) { background-color:#0f172a; }
+.dark :is(.bg-slate-50,.bg-slate-100,.bg-slate-50\/70) { background-color:#020617; }
+.dark :is(.text-slate-900,.text-slate-800,.text-slate-700,.text-slate-600,.text-slate-500,.text-slate-400) { color:#cbd5e1; }
+.dark :is(.bg-teal-50,.hover\:bg-teal-50:hover,.hover\:bg-teal-50\/50:hover) { background-color:#134e4a; }
+.dark :is(.text-teal-700,.text-teal-800,.text-teal-900) { color:#99f6e4; }
+.dark :is(.bg-amber-50,.bg-orange-50) { background-color:#422006; }
+.dark :is(.text-amber-950,.text-amber-900,.text-amber-800,.text-amber-700,.text-orange-700) { color:#fde68a; }
+.dark :is(.bg-emerald-50,.bg-green-50) { background-color:#022c22; }
+.dark :is(.text-emerald-700,.text-emerald-800,.text-emerald-950) { color:#a7f3d0; }
+.dark :is(.bg-rose-50,.bg-red-50) { background-color:#4c0519; }
+.dark :is(.text-red-700,.text-red-800,.text-rose-700,.text-rose-800,.text-rose-950) { color:#fecdd3; }
+.dark :is(.secondary:hover,.hover\:bg-slate-100:hover,.hover\:bg-slate-50:hover,.hover\:bg-white:hover) { background-color:#1e293b; }
+.dark button:focus-visible,.dark input:focus-visible,.dark select:focus-visible { outline-color:#14b8a6; }
+.dark .border-amber-500 { border-color:#f59e0b; }
+.dark .border-rose-400 { border-color:#fb7185; }
+.dark .border-emerald-500 { border-color:#10b981; }
+.dark .bg-rose-100 { background-color:#4c0519; }
+.dark .bg-teal-100 { background-color:#134e4a; }

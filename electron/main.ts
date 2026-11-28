@@ -1,5 +1,7 @@
+import { Enterprise, redeemAmount } from './enterprise'
+import type { DisplayCart, DisplayState, EnterpriseData, PrinterSetting } from '../src/types/enterprise'
 import { withDialogFocus } from './dialogFocus'
-import { app, BrowserWindow, dialog, ipcMain, IpcMainInvokeEvent } from 'electron'
+import { app, Menu, screen, BrowserWindow, dialog, ipcMain, IpcMainInvokeEvent } from 'electron'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -10,7 +12,7 @@ import { Catalog, nameOf, pinDigest, validPin } from './catalog'
 import { CloudBackup, DeviceSecrets } from './cloud'
 import { MediaLibrary } from './media'
 import { FloorService, orderColumns } from './service'
-import { Printer, receiptHtml, ticketHtml, zReportHtml, type ReceiptDocument } from './printer'
+import { Printer, receiptHtml, ticketHtml, zReportHtml, rawTicket, rawReceipt, rawZReport, type ReceiptDocument } from './printer'
 import { LicenseManager } from './license'
 import { LocalServer } from './localServer'
 import { Reports, closedDay } from './reports'
@@ -28,7 +30,7 @@ let rendererEpoch = 0
 function createWindow() {
   const icon = app.isPackaged ? path.join(process.resourcesPath, 'icon.ico') : path.join(app.getAppPath(), 'build/icon.ico')
   window = new BrowserWindow({
-    minWidth: 1280, minHeight: 720, show: false,
+    minWidth: 1280, minHeight: 720, show: false, autoHideMenuBar: true,
     icon: fs.existsSync(icon) ? icon : undefined,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true, sandbox: true },
   })
@@ -45,6 +47,9 @@ function createWindow() {
 
 function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cloud: CloudBackup, secrets: DeviceSecrets, storage: string) {
   const catalog = new Catalog(db, media)
+  const enterprise = new Enterprise(db)
+  let customerDisplay: BrowserWindow | null = null
+  let displayCart: DisplayCart | null = null
   const service = new FloorService(db)
   const printer = new Printer()
   const reports = new Reports(db)
@@ -85,7 +90,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
   const settings = (): Settings => {
     const { license_key, ...config } = db.all<Omit<Settings, 'licenseConfigured' | 'licenseActive'> & { license_key: string | null }>(
       `SELECT restaurant_name, tagline, logo_path, address, phone, gstin, currency_symbol, tax_rate,
-        tax_inclusive, auto_cleaning, receipt_width, print_preview, printer_name, upi_id, receipt_footer, cloud_sync_enabled, cloud_endpoint, license_key FROM settings`,
+        tax_inclusive, auto_cleaning, theme_mode, sound_enabled, loyalty_earn_percent, receipt_width, print_preview, printer_name, upi_id, receipt_footer, cloud_sync_enabled, cloud_endpoint, license_key FROM settings`,
     )[0]
     return { ...config, licenseConfigured: Boolean(license_key), licenseActive: Boolean(license_key && license.accepts(license_key)) }
   }
@@ -124,7 +129,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
       logo: config.logo_path, preset: 'dinein', tax: config.tax_rate, upi: config.upi_id, pin: '' },
       logo: preview && config.logo_path ? { name: config.logo_path, preview } : null }
   })
-  register('lock', 'public', () => { cashier = null; setupGrant = null; printer.clear() })
+  register('lock', 'public', () => { cashier = null; setupGrant = null; printer.clear(); displayCart=null; sendDisplay() })
   register('snapshot', 'staff', (): Snapshot => {
     const config = settings()
     return {
@@ -133,13 +138,68 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
       tables: db.all<FloorTable>('SELECT * FROM tables ORDER BY id'),
       categories: db.all<Category>('SELECT * FROM categories ORDER BY sort_order, id'),
       menu: db.all<MenuItem>('SELECT * FROM menu_items WHERE archived = 0 ORDER BY id'),
-      orders: db.all<Order>(`SELECT ${orderColumns} FROM orders WHERE status IN ('open','billed') ORDER BY id DESC`),
-      orderItems: db.all<OrderItem>("SELECT i.* FROM order_items i JOIN orders o ON o.id = i.order_id WHERE o.status IN ('open','billed') ORDER BY i.id"),
+      orders: db.all<Order>(`SELECT ${orderColumns} FROM orders WHERE status IN ('open','billed') AND COALESCE(is_parked,0)=0 ORDER BY id DESC`),
+      orderItems: db.all<OrderItem>("SELECT i.* FROM order_items i JOIN orders o ON o.id = i.order_id WHERE o.status IN ('open','billed') AND COALESCE(o.is_parked,0)=0 ORDER BY i.id"),
       kitchen: service.kitchen(),
+      seated: db.all("SELECT * FROM reservations WHERE status='seated' AND order_id IS NULL"),
+      pricing: enterprise.pricing(),
+      lowStock: db.all<{ n:number }>('SELECT COUNT(*) AS n FROM ingredients WHERE current_stock<low_stock_threshold')[0].n,
+      parkedCount: db.all<{ n:number }>("SELECT COUNT(*) AS n FROM orders WHERE is_parked=1 AND status='open'")[0].n,
       businessDate: localDay(),
       lastClose: db.all<{ created_at: string }>(`SELECT created_at FROM audit_logs WHERE ${closedDay} AND details = ? ORDER BY id DESC LIMIT 1`, [localDay()])[0]?.created_at ?? null,
     }
   })
+  register('enterpriseData', 'staff', (section: keyof EnterpriseData, filter) => {
+    if (cashier?.role === 'cashier' && ['ingredients','recipes','printers'].includes(section)) throw new Error('Manager access is required.')
+    return enterprise.data(section,filter)
+  })
+  register('customerLookup','staff',phone=>enterprise.customer(phone))
+  register('enterpriseAction','staff',action=>{
+    if (!['preferences','customer','reservation','seat','cancelReservation','expense','resume','deleteParked'].includes(action.type) &&
+        cashier?.role==='cashier') throw new Error('Manager access is required.')
+    enterprise.action(action,cashier!.id)
+    lan.changed()
+  })
+  register('parkOrder','staff',(id,revision)=>{ ensureIdle(id); service.parkOrder(id,revision,cashier!.id); lan.changed() })
+
+  const displayState = (): DisplayState => {
+    const config = settings()
+    return { name:config.restaurant_name,logo:media.preview(config.logo_path),currency:config.currency_symbol,
+      upi:config.upi_id, ...(displayCart ?? { total:0,checkout:false,items:[] }) }
+  }
+  function sendDisplay() {
+    if (customerDisplay && !customerDisplay.isDestroyed() && !customerDisplay.webContents.isLoadingMainFrame())
+      customerDisplay.webContents.send('pos:displayChanged',displayState())
+  }
+  ipcMain.handle('pos:displayState',event=>{
+    if (!customerDisplay || event.sender!==customerDisplay.webContents || event.senderFrame?.url!==homePage+'#/customer-display') throw new Error('Invalid display origin.')
+    return displayState()
+  })
+  register('publishDisplay','staff',cart=>{
+    if (cart && (!Number.isFinite(cart.total) || cart.total<0 || cart.total>1e11 || typeof cart.checkout!=='boolean' ||
+        !Array.isArray(cart.items) || cart.items.length>500 || cart.items.some(row=>typeof row.name!=='string' || row.name.length>120 ||
+          !Number.isFinite(row.amount) || !Number.isInteger(row.qty) || row.qty<1))) throw new Error('Invalid display cart.')
+    displayCart=cart
+    sendDisplay()
+  })
+  register('openCustomerDisplay','staff',async()=>{
+    if(customerDisplay && !customerDisplay.isDestroyed()) { customerDisplay.show(); return }
+    const displays=screen.getAllDisplays()
+    const current=screen.getDisplayMatching(window!.getBounds())
+    const external=displays.find(display=>display.id!==current.id)
+    const area=external?.bounds ?? current.workArea
+    const view=new BrowserWindow({ ...(external ? area : {x:area.x+40,y:area.y+40,width:Math.min(900,area.width-80),height:Math.min(680,area.height-80)}),
+      frame:false,autoHideMenuBar:true,fullscreen:Boolean(external),show:false,webPreferences:{preload:path.join(__dirname,'preload.js'),sandbox:true,nodeIntegration:false,contextIsolation:true} })
+    customerDisplay=view
+    view.webContents.setWindowOpenHandler(()=>({action:'deny'}))
+    view.webContents.on('will-navigate',event=>event.preventDefault())
+    view.webContents.on('before-input-event',(_event,input)=>{if(input.key==='Escape')view.close()})
+    view.on('closed',()=>{customerDisplay=null})
+    view.once('ready-to-show',()=>view.showInactive())
+    window!.once('closed',()=>{if(!view.isDestroyed())view.destroy()})
+    await view.loadURL(homePage+'#/customer-display')
+  })
+
   register('saveLayout', 'manager', updates => service.saveLayout(updates), 'tables')
   register('transfer', 'staff', input => {
     ensureIdle(input.orderId)
@@ -181,28 +241,36 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     timestamp: order.closed_at ? order.closed_at.replace(' ', 'T') + 'Z' : new Date().toISOString(),
   })
 
-  register('sendKot', 'staff', (id, revision) => {
+  const routeFor = (role: PrinterSetting['role']) => db.all<PrinterSetting>('SELECT * FROM printers WHERE role=? AND is_active=1',[role])[0]
+  const widthFor = (config:Settings,route?:PrinterSetting) => route ? Number.parseInt(route.paper_width) : config.receipt_width
+  function printTicket(id:number,actor:number) {
+    const config=settings()
+    const ticket=service.ticket(id)
+    const route=routeFor(ticket.station)
+    return printer.submit(ticketHtml(ticket,widthFor(config,route)),config,actor,route,rawTicket(ticket))
+  }
+  register('sendKot', 'staff', async (id, revision) => {
     ensureIdle(id)
     const actor = cashier!.id
-    const config = settings()
-    const ticket = service.ticket(service.sendKot(id, revision, actor))
-    return printer.submit(ticketHtml(ticket, config.receipt_width), config, actor)
+    const ids=service.sendKot(id,revision,actor)
+    const results = await Promise.all(ids.map(ticket=>printTicket(ticket,actor)))
+    const previews = results.filter(result=>result.html)
+    return previews.length ? {...previews[0], next:previews.slice(1)} : {html:null}
   })
-  register('printTicket', 'staff', id => {
-    const config = settings()
-    return printer.submit(ticketHtml(service.ticket(id), config.receipt_width), config, cashier!.id)
-  })
+  register('printTicket', 'staff', id => printTicket(id,cashier!.id))
   register('readyTicket', 'staff', id => service.readyTicket(id))
-  register('prebill', 'staff', async (id, revision, split) => {
+  register('prebill', 'staff', async (id, revision, split, redeem) => {
     ensureIdle(id)
     const order = service.activeOrder(id, revision)
     const actor = cashier!.id
     const config = settings()
-    const doc = document(order, service.receiptParts(order, split), config)
+    const redeemed=redeemAmount(db,order.customer_phone,redeem,order.grand_total)
+    const doc = document(order, service.receiptParts(order, split,redeemed), config)
+    const route=routeFor('receipt')
     printing.add(id)
     try {
-      const html = await receiptHtml(doc, config.receipt_width, true, media.preview(doc.logoName))
-      const result = await printer.submit(html, config, actor)
+      const html = await receiptHtml(doc, widthFor(config,route), true, media.preview(doc.logoName))
+      const result = await printer.submit(html, config, actor,route,rawReceipt(doc,true))
       if (!result.error || result.html) service.markPrinted(id, revision, actor)
       return result
     } finally { printing.delete(id) }
@@ -213,7 +281,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     const config = settings()
     const stored = service.settle(input, actor, (order, parts) => JSON.stringify(document(order, parts, config)))
     const doc = JSON.parse(stored) as ReceiptDocument
-    try { return await printer.submit(await receiptHtml(doc, config.receipt_width, false, media.preview(doc.logoName)), config, actor) }
+    try { const route=routeFor('receipt'); return await printer.submit(await receiptHtml(doc, widthFor(config,route), false, media.preview(doc.logoName)), config, actor,route,rawReceipt(doc,false)) }
     catch { return { html: null, error: 'Payment saved. Receipt rendering failed. Use Past Bills to reprint.' } }
   })
   register('pastBills', 'staff', before => service.pastBills(before))
@@ -222,7 +290,8 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     const config = settings()
     const actor = cashier!.id
     const doc = order.receipt_json ? JSON.parse(order.receipt_json) as ReceiptDocument : document(order, service.receiptParts(order, { kind: 'none' }), config)
-    return printer.submit(await receiptHtml(doc, config.receipt_width, false, media.preview(doc.logoName)), config, actor)
+    const route=routeFor('receipt')
+    return printer.submit(await receiptHtml(doc, widthFor(config,route), false, media.preview(doc.logoName)), config, actor,route,rawReceipt(doc,false))
   })
   register('voidReceipt', 'staff', (id, pin) => {
     requireManagerPin(pin)
@@ -231,7 +300,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
   register('printPreview', 'staff', id => printer.preview(id, cashier!.id))
 
   register('toggleItem', 'manager', (id: number) => db.write('UPDATE menu_items SET is_available = 1 - is_available WHERE id = ? AND archived = 0', [id]))
-  register('startup', 'public', () => ({ onboarding: needsSetup(), license: licenseState() }))
+  register('startup', 'public', () => ({ onboarding: needsSetup(), license: licenseState(),theme:settings().theme_mode }))
   register('setupLogo', 'public', () => {
     const grant = setupGrant
     const allowed = () => needsSetup() || Boolean(grant && setupGrant === grant && setupAdmin())
@@ -303,7 +372,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     let error: string | undefined
     try { if (secret) atomicWrite(destination(report), backup.archive(secret)) }
     catch { error = 'Day closed. The encrypted snapshot failed; retry from Z-Close to create it.' }
-    const result = await printer.submit(zReportHtml(report), settings(), actor.id)
+    const result = await printer.submit(zReportHtml(report), settings(), actor.id,routeFor('receipt'),rawZReport(report))
     return { ...result, error: [error, result.error].filter(Boolean).join(' ') || undefined }
   })
   register('lanStatus', 'admin', () => lan.state())
@@ -418,6 +487,8 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     db.write('UPDATE settings SET onboarding_completed=1,lan_enabled=0,lan_actor=NULL WHERE id=1')
     cloud.invalidate()
     printer.clear()
+    displayCart = null
+    sendDisplay()
     setupGrant = null
     return true
   }
@@ -461,6 +532,7 @@ if (!app.requestSingleInstanceLock()) app.quit()
 else {
   app.on('second-instance', () => { if (window?.isMinimized()) window.restore(); window?.focus() })
   app.whenReady().then(async () => {
+    Menu.setApplicationMenu(null)
     const file = dev ? path.join(app.getAppPath(), 'data', 'servex-dev.db') : path.join(app.getPath('userData'), 'servex-prod.db')
     const db = await PosDatabase.open(file)
     const storage = dev ? path.dirname(file) : path.join(app.getPath('appData'), 'ServeX')

@@ -1,3 +1,6 @@
+import { createConnection } from 'node:net'
+import { privatePrinter } from './enterprise'
+import type { PrinterSetting } from '../src/types/enterprise'
 import { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import QRCode from 'qrcode'
@@ -58,33 +61,46 @@ ${qr ? `<img class="qr" alt="UPI payment QR" src="${safeImage(qr)}">` : ''}<hr><
 }
 
 export function ticketHtml(ticket: KitchenTicket, width: number) {
-  return roll(width, [`<header><h2>Kitchen ticket #${esc(ticket.id)}</h2>${paragraph(ticket.reference)}</header><hr>` +
+  return roll(width, [`<header><h2>${ticket.station === 'bar' ? 'Bar' : 'Kitchen'} ticket #${esc(ticket.id)}</h2>${paragraph(ticket.reference)}</header><hr>` +
     ticket.lines.map(item => line(item.name, String(item.quantity)) + (item.notes ? `<small>${esc(item.notes)}</small>` : '')).join('')])
 }
 
 export class Printer {
-  private jobs = new Map<string, { html: string; device: string | null; actor: number }>()
+  private jobs = new Map<string, { html: string; device: string | null; actor: number; route?: PrinterSetting; raw?: Buffer }>()
   clear() { this.jobs.clear() }
 
-  async submit(html: string, config: Settings, actor: number): Promise<PrintResult> {
+  async submit(html: string, config: Settings, actor: number, route?: PrinterSetting, raw?: Buffer): Promise<PrintResult> {
     let error: string | undefined
     if (!config.print_preview) {
-      try { await this.print(html, config.printer_name); return { html: null } }
+      try { await this.print(html, config.printer_name, route, raw); return { html: null } }
       catch (cause) { error = cause instanceof Error ? cause.message : 'Printing failed.' }
     }
     const jobId = randomUUID()
     if (this.jobs.size >= 10) this.jobs.delete(this.jobs.keys().next().value!)
-    this.jobs.set(jobId, { html, device: config.printer_name, actor })
+    this.jobs.set(jobId, { html, device: config.printer_name, actor, route, raw })
     return { html, jobId, error }
   }
 
   async preview(jobId: string, actor: number) {
     const job = this.jobs.get(jobId)
     if (!job || job.actor !== actor) throw new Error('This print preview is no longer available.')
-    await this.print(job.html, job.device)
+    await this.print(job.html, job.device, job.route, job.raw)
   }
 
-  private async print(html: string, device: string | null) {
+  private async print(html: string, device: string | null, route?: PrinterSetting, raw?: Buffer) {
+    if (route?.connection_type === 'lan') {
+      const endpoint = privatePrinter(route.address)
+      if (!endpoint || !raw) throw new Error('This LAN printer job does not have an ESC/POS payload.')
+      await new Promise<void>((resolve, reject) => {
+        const socket = createConnection(endpoint)
+        socket.setTimeout(5000)
+        socket.once('timeout', () => socket.destroy(new Error('LAN printer timed out.')))
+        socket.once('error', reject)
+        socket.once('connect', () => socket.end(raw, () => { socket.destroy(); resolve() }))
+      })
+      return
+    }
+    if (route) device = route.address || (route.connection_type === 'usb' ? route.name : null)
     const view = new BrowserWindow({ show: false, webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } })
     try {
       // Base64 keeps the data URL compact, including embedded logos and QR codes.
@@ -104,8 +120,43 @@ ${paragraph(report.day)}${paragraph('Closed by ' + report.actor)}</header><hr>
 ${line('Orders', String(report.orderCount))}${line('Net sales', fmt(report.sales))}${line('Tax', fmt(report.tax))}
 ${Object.entries(report.payments).map(([mode, amount]) => line(mode + ' net', fmt(amount))).join('')}<hr>
 ${line('Opening float', fmt(report.opening))}${line('Cash sales', fmt(report.cashSales))}${line('Cash refunds', fmt(report.refunds))}
+${line('Cash expenses', fmt(report.cashExpenses??0))}
 ${line('Expected cash', fmt(report.expected))}${line('Actual counted', fmt(report.actual))}
 <strong>${line('Over / short', fmt(report.variance))}</strong><hr>
 ${[2000,500,200,100,50,20,10].map((value,i) => line(fmt(value), String(report.counts[i]))).join('')}
 ${line('Coins', fmt(report.coins))}`])
+}
+
+const plain = (value: unknown) => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').replace(/₹/g,'INR ').replace(/[^\x20-\x7e]/g,'?')
+const partText = (lines: unknown[]) => Buffer.from(lines.map(plain).join('\n')+'\n','ascii')
+const startRaw = Buffer.from([27,64])
+const cutRaw = Buffer.from([10,10,10,29,86,0])
+export function rawTicket(ticket: KitchenTicket) {
+  return Buffer.concat([startRaw,partText([`${ticket.station.toUpperCase()} KOT #${ticket.id}`,ticket.reference,
+    ...ticket.lines.flatMap(row=>[`${row.quantity} x ${row.name}`,...(row.notes?[row.notes]:[])])]),cutRaw])
+}
+
+function rawQr(uri: string) {
+  const data = Buffer.from(uri,'utf8')
+  const length = data.length + 3
+  return Buffer.concat([Buffer.from([29,40,107,3,0,49,67,5,29,40,107,length&255,length>>8,49,80,48]),
+    data,Buffer.from([29,40,107,3,0,49,81,48,10])])
+}
+export function rawReceipt(doc: ReceiptDocument, prebill: boolean) {
+  const money = (minor: number) => doc.brand.currency_symbol + (minor/100).toFixed(2)
+  return Buffer.concat(doc.parts.flatMap((part,index)=>{
+    const lines = [doc.brand.restaurant_name,doc.brand.address,doc.brand.phone,doc.brand.gstin && 'GSTIN: '+doc.brand.gstin,
+      (prebill?'Pre-bill ':'Receipt ')+doc.order.bill_number+(doc.parts.length>1?' / '+(index+1):''),doc.location,
+      ...part.lines.flatMap(row=>[`${row.quantity} x ${row.name}  ${money(row.net)}`,...(row.notes?[row.notes]:[])]),
+      'Subtotal '+money(part.net),'CGST '+money(Math.floor(part.tax/2)),'SGST '+money(Math.ceil(part.tax/2)),
+      'Discount '+money(part.discount),'Total '+money(part.total),!prebill && doc.order.payment_mode || '',doc.brand.receipt_footer]
+    return [startRaw,partText(lines.filter(Boolean)),
+      ...(prebill&&part.total>0?[rawQr(upiUri(doc.brand.upi_id,doc.brand.restaurant_name,part.total/100))]:[]),cutRaw]
+  }))
+}
+export function rawZReport(report: import('../src/types/pos').ZReport) {
+  return Buffer.concat([startRaw,partText([report.restaurant,'Z-REPORT '+report.day,'Closed by '+report.actor,
+    ...Object.entries({ 'Net sales':report.sales,'Tax':report.tax,'Opening':report.opening,'Cash sales':report.cashSales,
+      'Refunds':report.refunds,'Expenses':report.cashExpenses??0,'Expected':report.expected,'Actual':report.actual,'Variance':report.variance })
+      .map(([label,value])=>label+' '+report.currency+value.toFixed(2))]),cutRaw])
 }

@@ -14,7 +14,7 @@ export default function TableActions({ location, order, data, onClose }: {
   const active = data.orders.filter(row => row.status === 'open' || row.status === 'billed')
   const byLocation = new Map(active.map(row => [row.table_id, row]))
   const zones = new Map(data.zones.map(zone => [zone.id, zone.name]))
-  const vacant = data.tables.filter(table => table.status === 'vacant' && !byLocation.has(table.id))
+  const vacant = data.tables.filter(table => table.status === 'vacant' && !byLocation.has(table.id) && !data.seated.some(row=>row.table_id===table.id))
   const sources = data.tables.filter(table => table.id !== location.id && table.status === 'occupied' && byLocation.get(table.id)?.status === 'open')
   const choices = action === 'transfer' ? vacant : sources
   const checkoutAllowed = Boolean(order && !action && !busy)

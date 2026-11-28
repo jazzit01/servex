@@ -1,3 +1,5 @@
+import { useCustomer } from '../enterprise/useEnterprise'
+import { soundFx } from '../../utils/soundFx'
 import { useEffect, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { CreditCard, Printer, Split } from 'lucide-react'
@@ -16,6 +18,11 @@ export default function CheckoutModal({ order, lines, data, label, initialSplit,
   const [busy, setBusy] = useState(false)
   const [name, setName] = useState(order.customer_name ?? '')
   const [phone, setPhone] = useState(order.customer_phone ?? '')
+  const customer=useCustomer(phone)
+  const [redeem,setRedeem]=useState('')
+  const maximum=Math.max(0,Math.min(customer?.loyalty_points??0,order.grand_total))
+  const confirmedPhone=phone.trim()===(order.customer_phone??'')
+  const redemption=confirmedPhone?Math.min(maximum,Math.max(0,Math.round((Number(redeem)||0)*100)/100)):0
   const [edits, setEdits] = useState<Record<number, string>>({})
   const [added, setAdded] = useState<Record<number, number>>({})
   const [search, setSearch] = useState('')
@@ -42,14 +49,19 @@ export default function CheckoutModal({ order, lines, data, label, initialSplit,
   try {
     shares = splitReceipt(lines.map(line => ({ id: line.id, name: line.item_name, quantity: line.quantity, notes: line.notes,
       net: line.net_minor, tax: line.tax_minor })), Math.round(order.subtotal * 100), Math.round(order.tax_amount * 100),
-      Math.round(order.discount_amount * 100), split).map(part => part.total)
+      Math.round((order.discount_amount+redemption) * 100), split).map(part => part.total)
   } catch { /* Incomplete split assignments stay editable. */ }
   const money = (value: number) => data.settings.currency_symbol + value.toFixed(2)
-  const due = Math.round(order.grand_total * 100)
+  const due = Math.round((order.grand_total-redemption) * 100)
   const tender = cash === '' ? due : Math.round(Number(cash) * 100)
   const completeDisabled = busy || dirty || !shares.length || (mode === 'Cash' && (!Number.isSafeInteger(tender) || tender < due)) ||
     (mode === 'Room Folio' && (!order.customer_name || !order.customer_phone))
-  const uri = upiUri(data.settings.upi_id, data.settings.restaurant_name, order.grand_total)
+  const uri = upiUri(data.settings.upi_id, data.settings.restaurant_name, due/100)
+  const customerDisplay=JSON.stringify({checkout:true,total:due/100,
+    items:lines.map(row=>({name:row.item_name,qty:row.quantity,amount:row.line_total}))})
+  useEffect(()=>{
+    void window.servexApi.publishDisplay(JSON.parse(customerDisplay)).catch(()=>{})
+  },[customerDisplay])
   useEffect(() => {
     let current = true
     setQr('')
@@ -91,7 +103,7 @@ export default function CheckoutModal({ order, lines, data, label, initialSplit,
     const ok = await runAction(async () => { result = await action() }, paid ? 'Payment recorded.' : 'Pre-bill prepared.')
     setBusy(false)
     if (ok && result) {
-      if (paid) onPaid()
+      if (paid) {soundFx('paid');onPaid()}
       publishPrint(result)
     }
   }
@@ -163,14 +175,23 @@ export default function CheckoutModal({ order, lines, data, label, initialSplit,
           {dirty && <button className="secondary" disabled={busy} onClick={() => void save()}>Save bill edits</button>}
         </section>
         <section className="min-w-0 space-y-4 rounded-xl border bg-slate-50 p-4">
-          <div><h2>Payment</h2><div className="mt-1 flex justify-between"><span>Total due</span><strong className="text-xl">{money(order.grand_total)}</strong></div></div>
+          <div><h2>Payment</h2><div className="mt-1 flex justify-between"><span>Total due</span><strong className="text-xl">{money(due/100)}</strong></div></div>
           <div className="flex flex-wrap gap-2">{(['Cash', 'UPI', 'Card', 'Room Folio'] as const).map(payment =>
             <button key={payment} className={mode === payment ? 'primary' : 'secondary'} aria-pressed={mode === payment}
               disabled={busy || (payment === 'Room Folio' && order.order_type !== 'room')} onClick={() => setMode(payment)}>
               {payment === 'UPI' ? 'UPI QR' : payment}</button>)}</div>
+          {customer&&<div className="space-y-2 rounded-lg border p-2 text-xs">
+            <div className="flex justify-between gap-2"><span>{customer.name} · {customer.total_visits} visits</span>
+              <button className="underline" onClick={()=>setName(customer.name)}>Use Name</button></div>
+            {customer.favorite_item&&<p>Favorite Dish · {customer.favorite_item}</p>}
+            <p>{customer.loyalty_points.toFixed(2)} available points</p>
+            <div className="flex items-end gap-2"><Field label="Redeem Points"><input className="field" type="number" min={0} max={maximum} step=".01"
+              value={redeem} disabled={dirty||!confirmedPhone||maximum<=0} onChange={e=>setRedeem(e.target.value)}/></Field>
+              <button className="secondary shrink-0" disabled={dirty||!confirmedPhone||maximum<=0} onClick={()=>setRedeem(maximum.toFixed(2))}>Redeem Points</button></div>
+          </div>}
           {mode === 'Cash' && <>
             <Field label="Cash tendered"><input className="field" name="cash" type="number" inputMode="decimal" min={0} step="0.01"
-              value={cash === '' ? order.grand_total.toFixed(2) : cash} onChange={event => setCash(event.target.value)} /></Field>
+              value={cash === '' ? (due/100).toFixed(2) : cash} onChange={event => setCash(event.target.value)} /></Field>
             <div className="flex flex-wrap gap-1.5">{[null, 500, 1000, 2000].map(amount => <button key={amount ?? 'exact'} className="secondary px-2"
               onClick={() => setCash(amount === null ? '' : String(amount))}>{amount === null ? 'Exact' : data.settings.currency_symbol + amount}</button>)}</div>
             <div className="flex justify-between text-sm font-bold text-emerald-800"><span>Change to return</span><span>{money(Number.isFinite(tender) ? Math.max(0, tender - due) / 100 : 0)}</span></div>
@@ -182,11 +203,11 @@ export default function CheckoutModal({ order, lines, data, label, initialSplit,
           {mode === 'Room Folio' && <p className="text-sm text-slate-600">{order.customer_name && order.customer_phone ? `Record a room charge for ${order.customer_name}.` : 'Save the guest name and phone before charging the room.'}</p>}
           {dirty && <p className="text-xs text-amber-800">Save bill edits before printing or taking payment.</p>}
           <button className="secondary w-full" disabled={busy || dirty || !shares.length}
-            onClick={() => void print(() => window.servexApi.prebill(order.id, order.revision, split), false)}><Printer size={16} /> Print Pre-Bill</button>
+            onClick={() => void print(() => window.servexApi.prebill(order.id, order.revision, split, redemption), false)}><Printer size={16} /> Print Pre-Bill</button>
           <button ref={completeButton} autoFocus={!completeDisabled} className="primary h-12 w-full font-bold" disabled={completeDisabled}
             onClick={() => {
               if (mode === 'Cash' && tender < due) { toast('Cash tendered must cover the bill.', true); return }
-              void print(() => window.servexApi.completePayment({ orderId: order.id, revision: order.revision, mode, tendered: tender / 100, split }), true)
+              void print(() => window.servexApi.completePayment({ orderId: order.id, revision: order.revision, mode, tendered: tender / 100, split, redeem:redemption }), true)
             }}><CreditCard size={16} /> Complete &amp; Print Receipt <kbd className="text-xs">Enter</kbd></button>
         </section>
       </div>

@@ -32,7 +32,7 @@ export default function OrdersKotPage() {
     const order = data?.orders.find(row => row.id === ticket.order_id && ['open', 'billed'].includes(row.status))
     const elapsed = Math.max(0, Math.floor((now - Date.parse(ticket.created_at.replace(' ', 'T') + 'Z')) / 60000))
     return <article className="panel space-y-3 p-4" key={ticket.id}>
-      <div className="flex items-center justify-between"><div><h2>{ticket.reference}</h2><p className="caption">KOT #{ticket.id} · {elapsed}m</p></div>
+      <div className="flex items-center justify-between"><div><h2>{ticket.reference}</h2><p className="caption">{ticket.station==='bar'?'Bar':'Kitchen'} KOT #{ticket.id} · {elapsed}m</p></div>
         {ticket.status === 'ready' && <CheckCircle2 size={19} className="text-emerald-700" />}</div>
       <ul className="divide-y border-y text-sm">{ticket.lines.map((item, index) => <li key={index} className="py-2">
         <p>{item.quantity} × {item.name}</p>

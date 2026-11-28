@@ -108,11 +108,17 @@ export class Catalog {
     const active = flag(input.active)
     const categories = this.db.all<Category>('SELECT * FROM categories')
     if (categories.some(row => row.id !== input.id && key(row.name) === key(name))) throw new Error('This category already exists.')
+    const previous=categories.find(row=>row.id===input.id)
+    const station=input.station??previous?.station??'kitchen'
+    if(!['kitchen','bar','none'].includes(station))throw new Error('Choose a prep station.')
     if (input.id !== undefined) {
-      if (!categories.some(row => row.id === input.id)) throw new Error('Category no longer exists.')
-      this.db.write('UPDATE categories SET name = ?, is_active = ? WHERE id = ?', [name, active, input.id])
+      if (!previous) throw new Error('Category no longer exists.')
+      this.db.transaction(sql=>{
+        sql.run('UPDATE categories SET name=?,is_active=?,station=? WHERE id=?',[name,active,station,previous.id])
+        if(previous.station!==station)sql.run('UPDATE menu_items SET station=? WHERE category_id=? AND station=?',[station,previous.id,previous.station])
+      })
     } else {
-      this.db.write('INSERT INTO categories (name, is_active, sort_order) SELECT ?, ?, COALESCE(MAX(sort_order), -1) + 1 FROM categories', [name, active])
+      this.db.write('INSERT INTO categories (name,is_active,station,sort_order) SELECT ?,?,?,COALESCE(MAX(sort_order),-1)+1 FROM categories',[name,active,station])
     }
   }
 
@@ -128,7 +134,9 @@ export class Catalog {
 
   menuItem(input: MenuInput) {
     const values = menuValues(input)
-    if (!this.db.all('SELECT id FROM categories WHERE id = ?', [input.categoryId]).length) throw new Error('Choose an existing category.')
+    const category=this.db.all<Category>('SELECT * FROM categories WHERE id=?',[input.categoryId])[0]
+    if (!category) throw new Error('Choose an existing category.')
+    if(input.station!==undefined&&!['kitchen','bar','none'].includes(input.station))throw new Error('Choose a prep station.')
     if (input.imagePath !== null && !foodIdFromReference(input.imagePath) && !this.media.read(input.imagePath)) throw new Error('Choose an existing dish photo.')
     const duplicate = this.db.all<{ id: number; name: string }>('SELECT id, name FROM menu_items WHERE category_id = ? AND archived = 0', [input.categoryId])
       .some(row => row.id !== input.id && key(row.name) === key(input.name))
@@ -136,9 +144,9 @@ export class Catalog {
     const params = [input.categoryId, ...values, input.imagePath]
     if (input.id !== undefined) {
       if (!this.db.all('SELECT id FROM menu_items WHERE id = ? AND archived = 0', [input.id]).length) throw new Error('Dish no longer exists.')
-      this.db.write('UPDATE menu_items SET category_id = ?, name = ?, price = ?, tax_slab = ?, is_veg = ?, is_available = ?, image_path = ? WHERE id = ?', [...params, input.id])
+      this.db.write('UPDATE menu_items SET category_id = ?, name = ?, price = ?, tax_slab = ?, is_veg = ?, is_available = ?, image_path = ?, station=COALESCE(?,station) WHERE id = ?', [...params,input.station??null,input.id])
     } else {
-      this.db.write('INSERT INTO menu_items (category_id, name, price, tax_slab, is_veg, is_available, image_path) VALUES (?, ?, ?, ?, ?, ?, ?)', params)
+      this.db.write('INSERT INTO menu_items (category_id, name, price, tax_slab, is_veg, is_available, image_path, station) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [...params,input.station??category.station??'kitchen'])
     }
   }
 
@@ -198,7 +206,7 @@ export class Catalog {
         }
         const dish = existing.get(JSON.stringify([id, key(String(values[0]))]))
         if (dish) sql.run('UPDATE menu_items SET name = ?, price = ?, tax_slab = ?, is_veg = ?, is_available = ? WHERE id = ?', [...values, dish])
-        else sql.run('INSERT INTO menu_items (category_id, name, price, tax_slab, is_veg, is_available) VALUES (?, ?, ?, ?, ?, ?)', [id, ...values])
+        else sql.run('INSERT INTO menu_items (category_id,name,price,tax_slab,is_veg,is_available,station) VALUES (?,?,?,?,?,?,(SELECT station FROM categories WHERE id=?))',[id,...values,id])
       }
     })
     return items.length

@@ -1,3 +1,4 @@
+import EnterpriseSettings from '../components/enterprise/EnterpriseSettings'
 import { useState } from 'react'
 import { ArrowLeft, Building2, CloudUpload, Eye, EyeOff, ImagePlus, Layers, ShieldCheck, Trash2, Users } from 'lucide-react'
 import { Field, Switch } from '../components/ManagementControls'
@@ -120,6 +121,7 @@ const tabs = [
   { id: 'staff', label: 'Staff & PINs', icon: Users },
   { id: 'floor', label: 'Zones & locations', icon: Layers },
   { id: 'backup', label: 'Backup & cloud', icon: CloudUpload },
+  { id: 'enterprise', label: 'Pricing & Printers', icon: Layers },
   { id: 'mobile', label: 'Mobile Waiter Sync', icon: Layers },
 ] as const
 
@@ -135,6 +137,6 @@ export default function SettingsPage() {
     </nav>
     {tab !== 'profile' && <button className="secondary h-10" onClick={() => setTab('profile')}><ArrowLeft size={16} /> Back to Restaurant Settings</button>}
     {tab === 'profile' || cashier?.role !== 'admin' ? <ProfileSettings /> :
-      tab === 'staff' ? <StaffSettings /> : tab === 'floor' ? <FloorSettings /> : tab === 'mobile' ? <MobileWaiterSettings /> : <BackupSettings />}
+      tab === 'staff' ? <StaffSettings /> : tab === 'floor' ? <FloorSettings /> : tab === 'enterprise' ? <EnterpriseSettings /> : tab === 'mobile' ? <MobileWaiterSettings /> : <BackupSettings />}
   </div>
 }

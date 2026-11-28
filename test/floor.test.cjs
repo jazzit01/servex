@@ -1,3 +1,4 @@
+const { removeEnterprise } = require('./helpers/legacy-schema.cjs')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -92,6 +93,7 @@ test('v2 migration preserves the recorded cents of existing active orders', asyn
   const SQL = await initSqlJs()
   const legacy = new SQL.Database(db.bytes())
   t.after(() => legacy.close())
+  removeEnterprise(legacy)
   legacy.run(`DROP TABLE z_reports;
     DROP TABLE lan_requests;
     ALTER TABLE settings DROP COLUMN onboarding_completed;
@@ -122,11 +124,11 @@ test('v2 migration preserves the recorded cents of existing active orders', asyn
 test('delta tickets retain the exact sent items and manager authorization rolls back an attempted void', async t => {
   const { db, service } = await setup(t)
   const id = service.createOrder({ type: 'dinein', tableId: 1, items: [{ id: 1, quantity: 2, notes: 'No onion' }] }, 1)
-  const first = service.sendKot(id, 0, 1)
+  const [first] = service.sendKot(id, 0, 1)
   assert.equal(service.ticket(first).lines[0].notes, 'No onion')
   assert.throws(() => service.sendKot(id, 1, 1), /no unsent/)
   service.addItems(id, 1, [{ id: 2, quantity: 1 }], 1)
-  const second = service.sendKot(id, 2, 1)
+  const [second] = service.sendKot(id, 2, 1)
   assert.deepEqual(service.ticket(second).lines.map(row => row.name), ['Chicken Tikka'])
   const [line] = service.lines(id)
   const edit = { orderId: id, revision: 3, guestName: '', guestCount: null, quantities: [{ id: line.id, quantity: 1 }] }
