@@ -1,3 +1,4 @@
+import { useCalculatorActions, type CalculatorAction } from '../components/ui/calculatorBridge'
 import { priceAt } from '../types/scheduledPricing'
 import { soundFx } from '../utils/soundFx'
 import { enterpriseAction, useCustomer, useEnterprise } from '../components/enterprise/useEnterprise'
@@ -54,6 +55,8 @@ export default function BillingPage() {
   const [busy, setBusy] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const [checkout, setCheckout] = useState(openCheckout)
+  const [calculatorPayment, setCalculatorPayment] = useState<Exclude<CalculatorAction, { kind: 'charge' }>>()
+  const customId = useRef(0)
   const [splitFirst, setSplitFirst] = useState(false)
   const [confirmVoid, setConfirmVoid] = useState<BillEdit['quantities'][number]>()
   const [note, setNote] = useState<{ id: number; value: string; stored: boolean }>()
@@ -86,6 +89,11 @@ export default function BillingPage() {
   const active=data?.orders.find(row=>row.id===activeId && (row.status==='open'||row.status==='billed'))
   const displayLines=data?.orderItems.filter(row=>row.order_id===active?.id)??[]
   const displayDraft=Object.values(cart).flatMap(row=>{
+    if (row.custom && row.quantity && data) {
+      const inclusive = Boolean(data.settings.tax_inclusive)
+      const amounts = lineAmounts(row.custom.price, row.quantity, data.settings.tax_rate ?? 5, inclusive)
+      return [{ name: row.custom.name, qty: row.quantity, amount: amounts.gross / 100, due: (amounts.gross + (inclusive ? 0 : amounts.tax)) / 100 }]
+    }
     const item=data?.menu.find(item=>item.id===row.id&&item.is_available)
     if(!item||!row.quantity||!data?.categories.some(category=>category.id===item.category_id&&category.is_active))return []
     const priced=priceAt(item.price,item.category_id,data.pricing,priceTime)
@@ -100,6 +108,18 @@ export default function BillingPage() {
     return()=>clearTimeout(timer)
   },[display])
   useEffect(()=>()=>{void window.servexApi.publishDisplay(null).catch(()=>{})},[])
+  useCalculatorActions(Boolean(data && !checkout && !busy && (active || activeId === null &&
+    Object.values(cart).some(row => row.quantity > 0))), action => {
+    if (action.kind === 'charge') {
+      const id = --customId.current
+      setCart(previous => ({ ...previous, [id]: { id, quantity: 1, custom: { name: action.name, price: action.amount } } }))
+      soundFx('click')
+    } else if (canSave) {
+      void start('bill', action)
+    } else {
+      notify('Select a table or room before opening checkout.', true)
+    }
+  })
   if (!data) return null
   const order = data.orders.find(row => row.id === activeId && (row.status === 'open' || row.status === 'billed'))
   const lines = order ? data.orderItems.filter(row => row.order_id === order.id) : []
@@ -114,11 +134,16 @@ export default function BillingPage() {
     (filter === 'all' || Boolean(row.is_veg) === (filter === 'veg')) && fuzzy(row.name, search))
   const inclusive = Boolean(data.settings.tax_inclusive)
   const draft = Object.values(cart).filter(row => row.quantity > 0)
-  const draftRows = draft.flatMap(row => {
+  const draftRows = draft.flatMap<{ row: CartItem; item: { name: string; station: string }; label: string | null; gross: number; tax: number }>(row => {
+    if (row.custom) {
+      const { name, price } = row.custom
+      return [{ row, item: { name, station: 'none' }, label: null,
+        ...lineAmounts(price, row.quantity, data.settings.tax_rate ?? 5, inclusive) }]
+    }
     const item = available.find(choice => choice.id === row.id)
     if(!item)return []
     const scheduled=priceAt(item.price,item.category_id,data.pricing,priceTime)
-    return [{row,item,scheduled,...lineAmounts(scheduled.price,row.quantity,item.tax_slab??data.settings.tax_rate??5,inclusive)}]
+    return [{row,item,label:scheduled.label,...lineAmounts(scheduled.price,row.quantity,item.tax_slab??data.settings.tax_rate??5,inclusive)}]
   })
   const amount = orderAmounts(draftRows, inclusive)
   const tax = Math.round(((order?.tax_amount ?? 0) + amount.tax) * 100)
@@ -130,7 +155,7 @@ export default function BillingPage() {
 
   function adjust(id: number, change: number) {
     if(change>0)soundFx('click')
-    setCart(previous => ({ ...previous, [id]: { id, quantity: Math.max(0, Math.min(99, (previous[id]?.quantity ?? 0) + change)), notes: previous[id]?.notes } }))
+    setCart(previous => ({ ...previous, [id]: { id, quantity: Math.max(0, Math.min(99, (previous[id]?.quantity ?? 0) + change)), notes: previous[id]?.notes, custom: previous[id]?.custom } }))
   }
   function editSeed() {
     return { orderId: order!.id, revision: order!.revision, guestName: guest, phone, guestCount: guestCount ? Number(guestCount) : null }
@@ -148,7 +173,7 @@ export default function BillingPage() {
     else void editLine(change)
   }
 
-  async function start(intent: 'kot' | 'bill' | 'split') {
+  async function start(intent: 'kot' | 'bill' | 'split', payment?: typeof calculatorPayment) {
     if (busy || !canSave) return
     if (intent === 'kot' && !draftRows.some(row=>row.item.station!=='none') && !lines.some(row => !row.kot_printed && row.station!=='none')) {
       notify('There are no unsent kitchen items.', true); return
@@ -176,7 +201,7 @@ export default function BillingPage() {
         if(await runAction(async () => {
           publishPrint(await window.servexApi.sendKot(next.id, next.revision))
         }, 'Station tickets sent.'))soundFx('kot')
-      } else { setSplitFirst(intent === 'split'); setCheckout(true) }
+      } else { setSplitFirst(intent === 'split'); setCalculatorPayment(payment); setCheckout(true) }
     } finally { setBusy(false) }
   }
   launch.current = intent => void start(intent)
@@ -280,11 +305,11 @@ export default function BillingPage() {
               {line.kot_printed ? (line.notes && <small className="block text-amber-800">{line.notes}</small>) :
                 <button className="block text-left text-xs text-teal-800 underline" disabled={busy} onClick={() => setNote({ id: line.id, value: line.notes ?? '', stored: true })}>{line.notes || 'Add Note'}</button>}</span>
             <Quantity value={line.quantity} disabled={busy} decrease={() => decrease(line)}
-              increase={() => line.kot_printed ? adjust(line.menu_item_id, 1) : void editLine({ id: line.id, quantity: line.quantity + 1 })} />
+              increase={() => line.kot_printed && line.menu_item_id !== null ? adjust(line.menu_item_id, 1) : void editLine({ id: line.id, quantity: line.quantity + 1 })} />
             <span className="text-right font-semibold">{money(line.line_total)}</span>
           </div>)}
-          {draftRows.map(({ row, item, gross, scheduled }) => <div key={row.id} className="grid grid-cols-[1fr_auto_78px] items-center gap-2 px-4 py-2.5 text-sm">
-            <span><strong>{item.name}</strong>{scheduled.label&&<small className="block text-teal-700">{scheduled.label}</small>}<button className="block text-left text-xs text-teal-800 underline" disabled={busy}
+          {draftRows.map(({ row, item, gross, label }) => <div key={row.id} className="grid grid-cols-[1fr_auto_78px] items-center gap-2 px-4 py-2.5 text-sm">
+            <span><strong>{item.name}</strong>{label&&<small className="block text-teal-700">{label}</small>}<button className="block text-left text-xs text-teal-800 underline" disabled={busy}
               onClick={() => setNote({ id: row.id, value: row.notes ?? '', stored: false })}>{row.notes || 'Add Note'}</button></span>
             <Quantity value={row.quantity} disabled={busy} decrease={() => adjust(row.id, -1)} increase={() => adjust(row.id, 1)} />
             <span className="text-right font-semibold">{money(gross / 100)}</span>
@@ -322,7 +347,7 @@ export default function BillingPage() {
     </Modal>}
     {confirmVoid && <ManagerPin title="Authorize removal of a sent item" onClose={() => setConfirmVoid(undefined)}
       onVerify={pin => editLine(confirmVoid, pin)} />}
-    {checkout && order && <CheckoutModal order={order} lines={lines} label={reference} data={data} initialSplit={splitFirst}
+    {checkout && order && <CheckoutModal order={order} lines={lines} label={reference} data={data} initialSplit={splitFirst} calculatorPayment={calculatorPayment}
       onClose={() => { setCheckout(false); usePosStore.setState({ openCheckout: false }); setGuest(order.customer_name ?? ''); setPhone(order.customer_phone ?? '') }}
       onPaid={() => { usePosStore.setState({ openCheckout: false }); navigate(order.table_id === null ? 'orders' : 'floor') }} />}
   </div>

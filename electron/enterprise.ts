@@ -27,7 +27,7 @@ export const businessOpen = (db: PosDatabase) => {
 const one = (sql: Database, query: string, id: number) => sql.exec(query, [id])[0]?.values[0]
 const favorite = (sql: Database, id: number) => sql.run(`UPDATE customers SET favorite_item=(
   SELECT i.item_name FROM order_items i JOIN orders o ON i.order_id=o.id JOIN loyalty_ledger l ON o.id=l.order_id
-  WHERE l.customer_id=? AND o.status='paid' GROUP BY i.item_name ORDER BY SUM(i.quantity) DESC,i.item_name LIMIT 1) WHERE id=?`, [id,id])
+  WHERE l.customer_id=? AND o.status='paid' AND i.menu_item_id IS NOT NULL GROUP BY i.item_name ORDER BY SUM(i.quantity) DESC,i.item_name LIMIT 1) WHERE id=?`, [id,id])
 
 export function redeemAmount(db: PosDatabase, phone: string | null, amount: number | undefined, total: number) {
   if (amount === undefined || amount === 0) return 0

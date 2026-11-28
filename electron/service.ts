@@ -113,6 +113,18 @@ export class FloorService {
         throw new Error('An item or quantity is invalid.')
       }
       seen.add(row.id)
+      if (row.custom !== undefined) {
+        const name = typeof row.custom?.name === 'string' ? row.custom.name.trim() : ''
+        const price = row.custom?.price
+        if (row.id >= 0 || !name || name.length > 120 || /[\x00-\x1f\x7f]/.test(name) ||
+            !Number.isFinite(price) || price < 0.01 || price > 9999999.99 || price !== Number(price.toFixed(2))) {
+          throw new Error('Enter a label and a valid custom charge.')
+        }
+        const rate = config.tax_rate ?? 5
+        const { gross, tax } = lineAmounts(price, row.quantity, rate, inclusive)
+        return { item: { id: null, name, station: 'none' as const }, priced: { price, label: null },
+          quantity: row.quantity, gross, tax, net: inclusive ? gross - tax : gross, rate, inclusive, notes: optionalText(row.notes ?? '', 240) }
+      }
       const item = this.db.all<MenuItem>(`SELECT m.* FROM menu_items m JOIN categories c ON c.id = m.category_id
         WHERE m.id = ? AND m.is_available = 1 AND c.is_active = 1 AND m.archived = 0`, [row.id])[0]
       if (!item) throw new Error('A menu item is no longer available.')
@@ -154,6 +166,7 @@ export class FloorService {
     const reserved = tableId === null ? undefined : this.db.all<{id:number}>("SELECT id FROM reservations WHERE table_id=? AND status='seated' AND order_id IS NULL",[tableId])[0]
     if (reserved?.id !== input.reservationId) throw new Error('Open this guest’s seated reservation before starting the order.')
     const lines = this.menuLines(input.items)
+    if (mobile && lines.some(line => line.item.id === null)) throw new Error('Custom charges are available at the till.')
     const guest = guestDetails(input.guestName ?? '', input.guestCount ?? null)
     if (input.parked !== undefined && typeof input.parked !== 'boolean') throw new Error('Invalid hold request.')
     return this.db.transaction(sql => {
@@ -167,6 +180,9 @@ export class FloorService {
         sql.run("UPDATE tables SET status = 'occupied' WHERE id = ?", [tableId])
       }
       if (reserved) sql.run('UPDATE reservations SET order_id=? WHERE id=?',[id,reserved.id])
+      const customCharges = lines.filter(line => line.item.id === null)
+        .map(line => ({ name: line.item.name, price: line.priced.price, quantity: line.quantity }))
+      if (customCharges.length) audit(sql, actor, 'custom-charges-added', 'order', id, { customCharges })
       if (mobile) {
         sql.run('INSERT INTO lan_requests (request_id,payload,order_id) VALUES (?,?,?)', [mobile.key, mobile.hash, id])
         audit(sql, actor, 'MOBILE_ORDER', 'order', id, { channel: 'LAN' })
@@ -200,7 +216,7 @@ export class FloorService {
       this.recalculate(sql, order)
       sql.run('UPDATE orders SET discount_percent = 0 WHERE id = ?', [order.id])
       this.reopen(sql, order)
-      audit(sql, actor, 'order-items-added', 'order', id, { items: items.map(({ id, quantity }) => ({ id, quantity })) })
+      audit(sql, actor, 'order-items-added', 'order', id, { items: items.map(({ id, quantity, custom }) => ({ id, quantity, custom })) })
     })
   }
 
@@ -272,7 +288,7 @@ export class FloorService {
         sql.run("UPDATE orders SET status = 'void', closed_at = CURRENT_TIMESTAMP, revision = revision + 1 WHERE id = ?", [order.id])
         if (order.table_id !== null) sql.run("UPDATE tables SET status = 'vacant' WHERE id = ?", [order.table_id])
       } else this.reopen(sql, order)
-      audit(sql, actor, 'bill-edited', 'order', order.id, { lines: [...changes.keys()], added: added.length })
+      audit(sql, actor, 'bill-edited', 'order', order.id, { lines: [...changes.keys()], added: added.length, customCharges: added.filter(line => line.item.id === null).map(line => ({ name: line.item.name, price: line.priced.price, quantity: line.quantity })) })
     })
   }
 

@@ -132,3 +132,35 @@ test('LAN printer uses bounded private endpoints and strips ESC/POS controls fro
   assert.deepEqual(await payload,bytes)
   assert.match(bytes.toString('ascii'),/No ice @/)
 })
+
+test('v7 orders survive upgrade and custom charges can be discounted and restored', async t => {
+  const { db, service } = await fixture(t)
+  const existing = service.createOrder({ type: 'parcel', tableId: null, items: basket }, 1)
+  const sqlite = await initSqlJs()
+  const old = new sqlite.Database(db.bytes())
+  const { restoreRequiredMenuReference } = require('./helpers/legacy-schema.cjs')
+  restoreRequiredMenuReference(old)
+  old.run('PRAGMA user_version=7')
+  db.restore(old.export(), () => {})
+  old.close()
+  assert.equal(service.lines(existing)[0].menu_item_id, 1)
+
+  const items = [{ id: -1, quantity: 1, custom: { name: 'Open charge', price: 100 } }]
+  const input = { type: 'parcel', tableId: null, items }
+  assert.throws(() => service.createOrder(input, 1, { key: '1', hash: '1' }), /available at the till/)
+  assert.throws(() => service.createOrder({ ...input, items: [{ ...items[0], custom: { name: 'Invalid', price: -1 } }] }, 1), /valid custom charge/)
+  const id = service.createOrder(input, 1)
+  const [line] = service.lines(id)
+  assert.ok(line.id > service.lines(existing)[0].id)
+  assert.equal(line.item_name, 'Open charge')
+  assert.equal(line.menu_item_id, null)
+  assert.equal(line.station, 'none')
+  const before = service.activeOrder(id)
+  const edit = { orderId: id, revision: before.revision, guestName: '', guestCount: null, quantities: [], discount: { kind: 'flat', value: 20 } }
+  assert.throws(() => service.editBill(edit, 1), /Manager PIN required/)
+  assert.equal(service.activeOrder(id).grand_total, before.grand_total)
+  service.editBill({ ...edit, pin: '6789' }, 1, pin => assert.equal(pin, '6789'))
+  db.restore(db.bytes(), () => {})
+  assert.equal(service.activeOrder(id).grand_total, before.grand_total - 20)
+  assert.equal(service.lines(id)[0].menu_item_id, null)
+})

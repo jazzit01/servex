@@ -43,3 +43,8 @@
 .dark .border-emerald-500 { border-color:#10b981; }
 .dark .bg-rose-100 { background-color:#4c0519; }
 .dark .bg-teal-100 { background-color:#134e4a; }
+
+/* Keep the 420px billing cart visible while the calculator floats over the menu. */
+body:not(:has(dialog[open] [data-calculator-checkout])) .calculator-beside-cart {
+  right: calc(420px + 2.5rem);
+}

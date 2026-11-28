@@ -50,7 +50,7 @@ export interface Order {
 }
 export interface OrderItem {
   pricing_label: string | null; station: Station
-  id: number; order_id: number; menu_item_id: number; item_name: string
+  id: number; order_id: number; menu_item_id: number | null; item_name: string
   net_minor: number; tax_minor: number; tax_inclusive_snapshot: number | null
   unit_price: number; quantity: number; notes: string | null; kot_printed: number; line_total: number
 }
@@ -150,7 +150,7 @@ export interface CloudStatus { tokenConfigured: boolean; passphraseConfigured: b
 export interface PickedMedia { name: string; preview: string }
 
 export type PaymentMode = 'Cash' | 'Card' | 'UPI' | 'Room Folio'
-export interface CartItem { id: number; quantity: number; notes?: string }
+export interface CartItem { id: number; quantity: number; notes?: string; custom?: { name: string; price: number } }
 export interface LayoutRect { x_pos: number; y_pos: number; width: number; height: number }
 export type LayoutUpdate = LayoutRect & ({ id: number; zoneId: number } | {
   id?: undefined; zoneId: number; label: string; type: FloorTable['type']; capacity: number

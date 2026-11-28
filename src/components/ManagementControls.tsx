@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type KeyboardEventHandler, type ReactNode } from 'react'
 import { Image, X } from 'lucide-react'
 import { foodIdFromReference } from '../types/foodLibrary'
 import { usePosStore } from '../store/usePosStore'
@@ -21,7 +21,7 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 const modalStack: HTMLDialogElement[] = []
 
-export function Modal({ title, onClose, children, compact, wide, drawer, palette, dismissLabel = 'Cancel', dismissDisabled = false }: { title: string; onClose: () => void; children: ReactNode; compact?: boolean; wide?: boolean; drawer?: boolean; palette?: boolean; dismissLabel?: string; dismissDisabled?: boolean }) {
+export function Modal({ title, onClose, children, compact, wide, drawer, palette, calculator, onKeyDown, dismissLabel = 'Cancel', dismissDisabled = false }: { title: string; onClose: () => void; children: ReactNode; compact?: boolean; wide?: boolean; drawer?: boolean; palette?: boolean; calculator?: 'right' | 'beside-cart'; onKeyDown?: KeyboardEventHandler<HTMLDialogElement>; dismissLabel?: string; dismissDisabled?: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const toast = usePosStore(state => state.toast)
   const dismiss = useRef({ onClose, dismissDisabled })
@@ -29,6 +29,7 @@ export function Modal({ title, onClose, children, compact, wide, drawer, palette
   useEffect(() => {
     const element = dialog.current!
     element.showModal()
+    element.querySelector<HTMLElement>('[data-modal-focus]')?.focus()
     modalStack.push(element)
     function escape(event: KeyboardEvent) {
       if (event.key !== 'Escape' || modalStack.at(-1) !== element) return
@@ -44,12 +45,12 @@ export function Modal({ title, onClose, children, compact, wide, drawer, palette
       if (element.open) element.close()
     }
   }, [])
-  return <dialog ref={dialog} aria-label={title} onCancel={event => {
+  return <dialog ref={dialog} aria-label={title} onKeyDown={onKeyDown} onCancel={event => {
     event.preventDefault()
     event.stopPropagation()
     if (!dismissDisabled && modalStack.at(-1) === event.currentTarget) onClose()
   }}
-    className={`panel max-h-[90vh] max-w-[90vw] overflow-auto p-0 backdrop:bg-slate-950/40 ${drawer ? 'fixed inset-y-3 right-3 left-auto ml-auto mr-0 h-fit w-[520px]' : palette ? 'w-[576px] max-w-xl' : wide ? 'w-[768px] max-w-3xl' : compact ? 'w-[420px]' : 'w-[480px]'}`}>
+    className={`panel max-h-[90vh] max-w-[90vw] overflow-auto p-0 ${calculator ? 'fixed bottom-auto left-auto right-4 top-16 m-0 w-[340px] max-h-[calc(100vh-5rem)] tabular-nums backdrop:bg-transparent' : 'backdrop:bg-slate-950/40'} ${calculator === 'beside-cart' ? 'calculator-beside-cart' : ''} ${calculator ? '' : drawer ? 'fixed inset-y-3 right-3 left-auto ml-auto mr-0 h-fit w-[520px]' : palette ? 'w-[576px] max-w-xl' : wide ? 'w-[768px] max-w-3xl' : compact ? 'w-[420px]' : 'w-[480px]'}`}>
     <div className="flex items-center justify-between border-b px-5 py-4">
       <h2>{title}</h2><button className="secondary p-1.5" type="button" aria-label="Close dialog" disabled={dismissDisabled} onClick={onClose}><X size={16} /></button>
     </div>

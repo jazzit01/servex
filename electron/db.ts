@@ -135,10 +135,27 @@ export function hashPin(pin: string, salt: string) {
   return scryptSync(pin, salt, 32).toString('hex')
 }
 
+const v8OrderItems = `
+CREATE TABLE order_items_v8 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  menu_item_id INTEGER REFERENCES menu_items(id), item_name TEXT NOT NULL, unit_price REAL NOT NULL,
+  quantity INTEGER NOT NULL DEFAULT 1, notes TEXT, kot_printed INTEGER DEFAULT 0, line_total REAL NOT NULL,
+  net_minor INTEGER NOT NULL DEFAULT 0, tax_minor INTEGER NOT NULL DEFAULT 0, tax_rate_snapshot REAL,
+  tax_inclusive_snapshot INTEGER, station TEXT NOT NULL DEFAULT 'kitchen', pricing_label TEXT
+);
+INSERT INTO order_items_v8
+  SELECT id, order_id, menu_item_id, item_name, unit_price, quantity, notes, kot_printed, line_total,
+    net_minor, tax_minor, tax_rate_snapshot, tax_inclusive_snapshot, station, pricing_label FROM order_items;
+UPDATE sqlite_sequence SET seq = MAX(seq, COALESCE((SELECT seq FROM sqlite_sequence WHERE name='order_items'), 0))
+  WHERE name='order_items_v8';
+DROP TABLE order_items;
+ALTER TABLE order_items_v8 RENAME TO order_items;
+`
+
 function migrate(db: Database) {
   db.run('PRAGMA foreign_keys = ON')
   const version = Number(db.exec('PRAGMA user_version')[0].values[0][0])
-  if (version > 7) throw new Error('This database requires a newer ServeX version.')
+  if (version > 8) throw new Error('This database requires a newer ServeX version.')
   db.run('BEGIN')
   const fresh = version === 0 && !db.exec("SELECT name FROM sqlite_master WHERE name = 'settings' AND type = 'table'").length
   if (version < 1) db.run(schema + 'PRAGMA user_version = 1;')
@@ -248,6 +265,7 @@ function migrate(db: Database) {
     `)
     db.run('PRAGMA user_version = 7')
   }
+  if (version < 8) db.run(v8OrderItems + 'PRAGMA user_version = 8;')
   db.run('COMMIT')
 }
 
@@ -325,6 +343,7 @@ export class PosDatabase {
         if (version >= 4) reference.run(v4Schema)
         if (version >= 5) reference.run(v5Schema)
         if (version >= 7) enterpriseMigrate(reference)
+        if (version >= 8) reference.run(v8OrderItems)
         const tables = reference.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")[0].values.flat()
         const codeObjects = "SELECT name, sql FROM sqlite_master WHERE type IN ('trigger', 'view') ORDER BY name"
         if (JSON.stringify(candidate.exec(codeObjects)) !== JSON.stringify(reference.exec(codeObjects)) ||

@@ -1,5 +1,5 @@
 import { useEffect,useRef,useState } from 'react'
-import { ArrowRight, DatabaseBackup, LayoutGrid, Monitor, Moon, ReceiptText, Search, Utensils } from 'lucide-react'
+import { ArrowRight, Calculator, DatabaseBackup, LayoutGrid, Monitor, Moon, ReceiptText, Search, Utensils } from 'lucide-react'
 import { Modal } from '../ManagementControls'
 import { enterpriseAction } from '../enterprise/useEnterprise'
 import { usePosStore } from '../../store/usePosStore'
@@ -8,7 +8,7 @@ import type { Route } from '../../types/pos'
 const screens: [Route,string][]=[['floor','Floors & Rooms'],['billing','Quick Billing'],['orders','Orders & KOT'],['menu','Menu Manager'],['crm','Customers & Loyalty'],['inventory','Inventory & Recipes'],['reports','Reports & Z-Close'],['settings','Settings']]
 type Command={id:string;label:string;detail:string;icon:typeof Search; run:()=>void}
 
-export default function CommandPalette({close,backup}:{close:()=>void;backup:()=>void}){
+export default function CommandPalette({close,backup,calculator}:{close:()=>void;backup:()=>void;calculator:()=>void}){
   const store=usePosStore()
   const data=store.data
   const [search,setSearch]=useState('')
@@ -17,6 +17,7 @@ export default function CommandPalette({close,backup}:{close:()=>void;backup:()=
   const query=search.toLowerCase().trim()
   const includes=(value:string)=>query.split(/\s+/).every(token=>value.toLowerCase().includes(token))
   const actions:Command[]=[
+    {id:'calculator',label:'Open Smart Calculator',detail:'F9',icon:Calculator,run:calculator},
     {id:'display',label:'Open Customer Display',detail:'Quick action',icon:Monitor,run:()=>void window.servexApi.openCustomerDisplay().catch(error=>store.notify(error.message,true))},
     {id:'theme',label:'Toggle Dark Mode',detail:'Quick action',icon:Moon,run:()=>void enterpriseAction({type:'preferences',theme:data?.settings.theme_mode==='dark'?'light':'dark'})},
     {id:'close',label:'Run Z-Close',detail:'Quick action',icon:ReceiptText,run:()=>{usePosStore.setState({reportTab:'close'});store.navigate('reports');window.dispatchEvent(new Event('servex:open-z-close'))}},
@@ -45,7 +46,7 @@ export default function CommandPalette({close,backup}:{close:()=>void;backup:()=
   function execute(command:Command){close();command.run()}
   return <Modal title="Command Palette" onClose={close} palette>
     <label className="relative block"><Search size={17} className="absolute left-3 top-3 text-slate-500"/>
-      <input autoFocus className="field pl-10" aria-label="Search commands" placeholder="Search dishes, locations, screens or actions" value={search}
+      <input data-modal-focus className="field pl-10" aria-label="Search commands" placeholder="Search dishes, locations, screens or actions" value={search}
         onChange={e=>{setSearch(e.target.value);setSelected(0)}} onKeyDown={e=>{
           if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();setSelected(Math.max(0,Math.min(commands.length-1,index+(e.key==='ArrowDown'?1:-1))))}
           if(e.key==='Enter'&&commands[index]){e.preventDefault();execute(commands[index])}

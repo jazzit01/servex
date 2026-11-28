@@ -1,3 +1,4 @@
+import { useCalculatorActions, type CalculatorAction } from '../ui/calculatorBridge'
 import { useCustomer } from '../enterprise/useEnterprise'
 import { soundFx } from '../../utils/soundFx'
 import { useEffect, useRef, useState } from 'react'
@@ -6,15 +7,15 @@ import { CreditCard, Printer, Split } from 'lucide-react'
 import { Field, Modal } from '../ManagementControls'
 import { runAction, usePosStore } from '../../store/usePosStore'
 import { splitReceipt, upiUri } from '../../types/settlement'
-import type { BillSplit, Order, OrderItem, PaymentMode, PrintResult, Snapshot } from '../../types/pos'
+import type { BillSplit, CartItem, Order, OrderItem, PaymentMode, PrintResult, Snapshot } from '../../types/pos'
 import ManagerPin from './ManagerPin'
 import { publishPrint } from './PrintPreview'
 
-export default function CheckoutModal({ order, lines, data, label, initialSplit, onClose, onPaid }: {
-  order: Order; lines: OrderItem[]; data: Snapshot; label: string; initialSplit: boolean; onClose: () => void; onPaid: () => void
+export default function CheckoutModal({ order, lines, data, label, initialSplit, calculatorPayment, onClose, onPaid }: {
+  order: Order; lines: OrderItem[]; data: Snapshot; label: string; initialSplit: boolean; calculatorPayment?: Exclude<CalculatorAction, { kind: 'charge' }>; onClose: () => void; onPaid: () => void
 }) {
   const [mode, setMode] = useState<PaymentMode>('Cash')
-  const [cash, setCash] = useState('')
+  const [cash, setCash] = useState(calculatorPayment?.kind === 'tender' ? calculatorPayment.amount.toFixed(2) : '')
   const [busy, setBusy] = useState(false)
   const [name, setName] = useState(order.customer_name ?? '')
   const [phone, setPhone] = useState(order.customer_phone ?? '')
@@ -25,6 +26,8 @@ export default function CheckoutModal({ order, lines, data, label, initialSplit,
   const redemption=confirmedPhone?Math.min(maximum,Math.max(0,Math.round((Number(redeem)||0)*100)/100)):0
   const [edits, setEdits] = useState<Record<number, string>>({})
   const [added, setAdded] = useState<Record<number, number>>({})
+  const [custom, setCustom] = useState<CartItem[]>([])
+  const nextCustomId = useRef(0)
   const [search, setSearch] = useState('')
   const [inclusive, setInclusive] = useState<boolean>()
   const [discountKind, setDiscountKind] = useState<'flat' | 'percent'>(order.discount_percent > 0 ? 'percent' : 'flat')
@@ -41,7 +44,7 @@ export default function CheckoutModal({ order, lines, data, label, initialSplit,
   const changed = lines.filter(line => edits[line.id] !== undefined && edits[line.id] !== String(line.quantity))
   const pendingItems = Object.entries(added).filter(([, qty]) => qty > 0).map(([id, quantity]) => ({ id: Number(id), quantity }))
   const dirty = name !== (order.customer_name ?? '') || phone !== (order.customer_phone ?? '') ||
-    changed.length > 0 || pendingItems.length > 0 || inclusive !== undefined || discountTouched
+    changed.length > 0 || pendingItems.length > 0 || custom.length > 0 || inclusive !== undefined || discountTouched
   const split: BillSplit = splitKind === 'equal' ? { kind: 'equal', count } : splitKind === 'items'
     ? { kind: 'items', groups: Array.from({ length: Number.isInteger(count) && count >= 2 && count <= 20 ? count : 0 }, (_, group) =>
       lines.filter(line => (assignments[line.id] ?? 0) === group).map(line => line.id)) } : { kind: 'none' }
@@ -80,18 +83,39 @@ export default function CheckoutModal({ order, lines, data, label, initialSplit,
     return () => window.removeEventListener('keydown', enter)
   }, [])
 
-  async function save(override?: string) {
+  function applyCalculator(action: CalculatorAction) {
+    if (action.kind === 'tender') { setMode('Cash'); setCash(action.amount.toFixed(2)); return }
+    toggleSplit(false)
+    if (action.kind === 'charge') {
+      const id = --nextCustomId.current
+      setCustom(previous => [...previous, { id, quantity: 1, custom: { name: action.name, price: action.amount } }])
+      return
+    }
+    setDiscountKind('flat')
+    setDiscount(action.amount.toFixed(2))
+    touchDiscount(true)
+    if (!dirty) void save(undefined, action.amount)
+  }
+  useCalculatorActions(!busy && !pin, applyCalculator)
+  const initialPayment = useRef(calculatorPayment)
+  useEffect(() => {
+    const action = initialPayment.current
+    initialPayment.current = undefined
+    if (action?.kind === 'discount') applyCalculator(action)
+  }, [])
+
+  async function save(override?: string, flat?: number) {
     setBusy(true)
     const ok = await runAction(() => window.servexApi.editBill({
       orderId: order.id, revision: order.revision, guestName: name, guestCount: order.guest_count, phone,
       quantities: changed.map(line => ({ id: line.id, quantity: edits[line.id] === '' ? NaN : Number(edits[line.id]) })),
-      added: pendingItems, inclusive, discount: discountTouched ? { kind: discountKind, value: Number(discount) } : undefined, pin: override,
+      added: [...pendingItems, ...custom], inclusive, discount: flat !== undefined ? { kind: 'flat', value: flat } : discountTouched ? { kind: discountKind, value: Number(discount) } : undefined, pin: override,
     }), 'Bill updated.')
     setBusy(false)
     if (ok) {
       const next = usePosStore.getState().data?.orders.find(row => row.id === order.id)
       setName(next?.customer_name ?? ''); setPhone(next?.customer_phone ?? '')
-      setEdits({}); setAdded({}); touchDiscount(false); setInclusive(undefined)
+      setEdits({}); setAdded({}); setCustom([]); touchDiscount(false); setInclusive(undefined)
       if (next) { setDiscountKind(next.discount_percent > 0 ? 'percent' : 'flat'); setDiscount(String(next.discount_percent || next.discount_amount)) }
     } else if (!override && usePosStore.getState().toast?.message.includes('Manager PIN required')) requestPin(true)
     return ok
@@ -113,7 +137,7 @@ export default function CheckoutModal({ order, lines, data, label, initialSplit,
     <Modal wide dismissLabel="Back" dismissDisabled={busy} title={`Checkout · ${label}`} onClose={() => {
       if (!busy && (!dirty || window.confirm('Discard unsaved bill edits?'))) onClose()
     }}>
-      <div className="grid grid-cols-2 gap-5">
+      <div className="grid grid-cols-2 gap-5" data-calculator-checkout>
         <section className="min-w-0 space-y-3">
           <div className="flex gap-2">
             <button className={showSplit ? 'secondary' : 'primary'} onClick={() => toggleSplit(false)}>Edit bill</button>
@@ -154,6 +178,10 @@ export default function CheckoutModal({ order, lines, data, label, initialSplit,
                   value={edits[line.id] ?? line.quantity} disabled={busy}
                   onChange={event => setEdits(previous => ({ ...previous, [line.id]: event.target.value }))} />
               </label>)}
+              {custom.map(item => <div className="flex items-center justify-between gap-2 p-2 text-sm" key={item.id}>
+                <span>{item.custom?.name} · {money(item.custom?.price ?? 0)} · New</span>
+                <button className="secondary" onClick={() => setCustom(previous => previous.filter(row => row.id !== item.id))}>Remove</button>
+              </div>)}
               {pendingItems.map(item => <label className="flex items-center justify-between gap-2 p-2 text-sm" key={item.id}>
                 <span>{menu.find(row => row.id === item.id)?.name} · New</span>
                 <input className="field w-20" type="number" min={0} max={99} value={item.quantity} onChange={event =>
