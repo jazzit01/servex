@@ -1,5 +1,5 @@
 import { useEffect,useRef,useState } from 'react'
-import { ArrowRight, Calculator, DatabaseBackup, LayoutGrid, Monitor, Moon, ReceiptText, Search, Utensils } from 'lucide-react'
+import { ArrowRight, Calculator, DatabaseBackup, HelpCircle, LayoutGrid, Monitor, Moon, ReceiptText, Search, Utensils } from 'lucide-react'
 import { Modal } from '../ManagementControls'
 import { enterpriseAction } from '../enterprise/useEnterprise'
 import { usePosStore } from '../../store/usePosStore'
@@ -8,7 +8,7 @@ import type { Route } from '../../types/pos'
 const screens: [Route,string][]=[['floor','Floors & Rooms'],['billing','Quick Billing'],['orders','Orders & KOT'],['menu','Menu Manager'],['crm','Customers & Loyalty'],['inventory','Inventory & Recipes'],['reports','Reports & Z-Close'],['settings','Settings']]
 type Command={id:string;label:string;detail:string;icon:typeof Search; run:()=>void}
 
-export default function CommandPalette({close,backup,calculator}:{close:()=>void;backup:()=>void;calculator:()=>void}){
+export default function CommandPalette({close,backup,calculator,help}:{close:()=>void;backup:()=>void;calculator:()=>void;help:()=>void}){
   const store=usePosStore()
   const data=store.data
   const [search,setSearch]=useState('')
@@ -17,6 +17,7 @@ export default function CommandPalette({close,backup,calculator}:{close:()=>void
   const query=search.toLowerCase().trim()
   const includes=(value:string)=>query.split(/\s+/).every(token=>value.toLowerCase().includes(token))
   const actions:Command[]=[
+    {id:'help',label:'Open Help & Shortcuts Guide',detail:'Ctrl+/',icon:HelpCircle,run:help},
     {id:'calculator',label:'Open Smart Calculator',detail:'F9',icon:Calculator,run:calculator},
     {id:'display',label:'Open Customer Display',detail:'Quick action',icon:Monitor,run:()=>void window.servexApi.openCustomerDisplay().catch(error=>store.notify(error.message,true))},
     {id:'theme',label:'Toggle Dark Mode',detail:'Quick action',icon:Moon,run:()=>void enterpriseAction({type:'preferences',theme:data?.settings.theme_mode==='dark'?'light':'dark'})},

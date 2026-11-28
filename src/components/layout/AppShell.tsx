@@ -1,22 +1,12 @@
-import { Modal } from '../ManagementControls'
+import HelpGuideModal from '../ui/HelpGuideModal'
 import SmartCalculatorModal, { type CalculatorEntry } from '../ui/SmartCalculatorModal'
 import QuickBackup from '../enterprise/QuickBackup'
 import CommandPalette from '../ui/CommandPalette'
 import { enterpriseAction } from '../enterprise/useEnterprise'
 import { useEffect, useState, type ReactNode } from 'react'
-import { AlertTriangle, Boxes, Calculator, Monitor, Moon, Search, Sun, Users, Volume2, VolumeX, BarChart3, ChefHat, ChevronsLeft, ChevronsRight, LayoutGrid, Lock, Plus, Receipt, Settings, UserRound, UtensilsCrossed } from 'lucide-react'
+import { AlertTriangle, Boxes, Calculator, HelpCircle, Monitor, Moon, Search, Sun, Users, Volume2, VolumeX, BarChart3, ChefHat, ChevronsLeft, ChevronsRight, LayoutGrid, Lock, Plus, Receipt, Settings, UserRound, UtensilsCrossed } from 'lucide-react'
 import { usePosStore } from '../../store/usePosStore'
 import type { LicenseState, Route } from '../../types/pos'
-
-const counterShortcuts = [
-  ['Alt+0–9', 'Switch floor zones (0 for All Zones)'],
-  ['F1', 'New takeaway'],
-  ['F2', 'Send KOT in billing'],
-  ['F4', 'Checkout in billing'],
-  ['F9', 'Smart Calculator'],
-  ['Ctrl+K', 'Command Palette'],
-  ['Esc', 'Cancel or close'],
-]
 
 const links = [
   { route: 'floor', label: 'Floors & Rooms', icon: LayoutGrid },
@@ -45,7 +35,7 @@ export default function AppShell({ children, license, activate }: { children: Re
   const [collapsed, setCollapsed] = useState(false)
   const [palette,setPalette]=useState(false)
   const [backup,setBackup]=useState(false)
-  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const [calculator, setCalculator] = useState(false)
   const [tape, setTape] = useState<CalculatorEntry[]>([])
   const dark=data?.settings.theme_mode==='dark'
@@ -60,11 +50,13 @@ export default function AppShell({ children, license, activate }: { children: Re
         }
         return
       }
-      if (event.key === '?' && !event.repeat && !event.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey &&
-          !document.querySelector('dialog[open]') && !(event.target instanceof HTMLElement &&
-            (event.target.isContentEditable || event.target.matches('input, textarea, select')))) {
+      const target = event.target
+      const editingText = target instanceof HTMLElement && (target.isContentEditable || target.matches('input, textarea, select'))
+      const helpShortcut = (event.ctrlKey || event.metaKey) && (event.key === '/' || event.code === 'Slash') ||
+        event.key === '?' && !event.ctrlKey && !event.metaKey && !editingText
+      if (helpShortcut && !event.altKey && !event.repeat && !event.isComposing && !document.querySelector('dialog[open]')) {
         event.preventDefault()
-        setShortcutsOpen(true)
+        setHelpOpen(true)
         return
       }
       if(!((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k')||event.repeat||document.querySelector('dialog[open]'))return
@@ -110,7 +102,9 @@ export default function AppShell({ children, license, activate }: { children: Re
           <span className="hidden whitespace-nowrap border-l pl-4 text-xs text-slate-500 2xl:inline">{now.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} · {now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
         </div>
         <div className="flex items-center gap-2">
-          <button className="secondary h-9 whitespace-nowrap px-2.5" aria-keyshortcuts="?" onClick={() => setShortcutsOpen(true)}>Shortcuts <kbd className="caption">?</kbd></button>
+          <button className="secondary h-9 whitespace-nowrap px-2.5" aria-keyshortcuts="Control+/ ?" onClick={() => setHelpOpen(true)}>
+            <HelpCircle size={16}/> Help <kbd className="caption">?</kbd>
+          </button>
           <button className="secondary h-9 px-2.5" title="Smart Calculator (F9)" aria-label="Open Smart Calculator" aria-keyshortcuts="F9"
             onClick={() => setCalculator(true)} disabled={calculator}><Calculator size={17}/></button>
           <button className="secondary h-9 whitespace-nowrap" onClick={()=>setPalette(true)}><Search size={16}/>Commands <kbd className="caption">Ctrl+K</kbd></button>
@@ -131,13 +125,9 @@ export default function AppShell({ children, license, activate }: { children: Re
       </div>}
       <main className="min-h-0 flex-1 overflow-auto bg-slate-50 px-6 py-6">{children}</main>
     </div>
-    {shortcutsOpen && <Modal compact title="Counter shortcuts" onClose={() => setShortcutsOpen(false)} dismissLabel="Close">
-      <dl className="divide-y">{counterShortcuts.map(([key, action]) => <div key={key} className="grid grid-cols-[5.5rem_1fr] items-center gap-3 py-2 text-sm">
-        <dt><kbd className="rounded border bg-slate-50 px-1.5 py-0.5 text-xs">{key}</kbd></dt><dd>{action}</dd>
-      </div>)}</dl>
-    </Modal>}
+    {helpOpen && <HelpGuideModal close={() => setHelpOpen(false)}/>}
     {backup&&<QuickBackup close={()=>setBackup(false)}/>}
-    {palette&&<CommandPalette close={()=>setPalette(false)} backup={()=>setBackup(true)} calculator={() => setCalculator(true)}/>}
+    {palette&&<CommandPalette close={()=>setPalette(false)} backup={()=>setBackup(true)} calculator={() => setCalculator(true)} help={() => setHelpOpen(true)}/>}
     {calculator && <SmartCalculatorModal close={() => setCalculator(false)} tape={tape} besideCart={route === 'billing'}
       record={entry => setTape(current => [entry, ...current].slice(0, 5))}/>}
   </div>

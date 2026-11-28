@@ -48,3 +48,14 @@
 body:not(:has(dialog[open] [data-calculator-checkout])) .calculator-beside-cart {
   right: calc(420px + 2.5rem);
 }
+
+.shortcut-cheat-sheet { display: none; }
+@media print {
+  body:has(> .shortcut-cheat-sheet) > :not(.shortcut-cheat-sheet) { display: none !important; }
+  body:has(> .shortcut-cheat-sheet) { background: white !important; color: black !important; }
+  .shortcut-cheat-sheet { display: block; max-width: 175mm; margin: 0 auto; padding: 5mm 0; }
+  .shortcut-cheat-sheet h1 { margin-bottom: 7mm; font-size: 22pt; }
+  .shortcut-cheat-sheet section { break-inside: avoid; }
+  .shortcut-cheat-sheet p { margin-top: 5mm; font-size: 10pt; }
+  .shortcut-cheat-sheet :is(kbd, h3, dd) { color: black !important; }
+}
