@@ -20,12 +20,28 @@ export function machineFingerprint() {
   return createHash('sha256').update('ServeX license v1:' + identity.toLowerCase()).digest('hex').slice(0, 24).toUpperCase()
 }
 
-export function validActivation(value: string, machine: string, publicKey?: string) {
-  if (!publicKey || typeof value !== 'string' || value.length > 256 || !/^SVX-(?:[A-F0-9]{4}-){31}[A-F0-9]{4}$/i.test(value.trim())) return false
+// Provision this value with the issuer's SPKI public PEM before shipping a paid release.
+export const PUBLIC_KEY_PEM = ''
+
+export function validActivation(value: string, machine: string, publicKey: string = PUBLIC_KEY_PEM) {
+  if (!publicKey.startsWith('-----BEGIN PUBLIC KEY-----') || typeof value !== 'string' || value.length > 256) return false
+  const deviceId = machine.trim().toUpperCase()
+  if (!/^[A-F0-9]{24}$/.test(deviceId)) return false
+  const token = value.trim()
   try {
     const key = createPublicKey(publicKey)
-    return key.asymmetricKeyType === 'ed25519' && verify(null, Buffer.from('ServeX commercial v1:' + machine), key,
-      Buffer.from(value.trim().slice(4).replace(/-/g, ''), 'hex'))
+    if (key.asymmetricKeyType !== 'ed25519') return false
+    if (/^SVX-[A-Za-z0-9_-]{86}$/.test(token)) {
+      const encoded = token.slice(4)
+      const signature = Buffer.from(encoded, 'base64url')
+      return signature.length === 64 && signature.toString('base64url') === encoded &&
+        verify(null, Buffer.from(deviceId), key, signature)
+    }
+    if (/^SVX-(?:[A-F0-9]{4}-){31}[A-F0-9]{4}$/i.test(token)) {
+      const signature = Buffer.from(token.slice(4).replace(/-/g, ''), 'hex')
+      return verify(null, Buffer.from('ServeX commercial v1:' + deviceId), key, signature)
+    }
+    return false
   } catch { return false }
 }
 

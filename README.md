@@ -39,22 +39,23 @@ Reports use the device's local business date. A paid bill contributes sales when
 
 ## Generating Customer License Keys
 
-A new device gets seven days of full trial access. Activation is offline and bound to its machine ID. Create one issuer key pair before building a release:
+A new device gets seven days of full trial access. Offline activation requires a release built with the issuer's Ed25519 public key. On the issuer's workstation, generate a pair once:
 
 ```sh
-node scripts/generate-license.js --init /secure/location/servex-private.pem build/license-public.pem
-npm run build:win
+node scripts/generate-license.js --init-keys
 ```
 
-Only the public key is packaged. Keep the private key outside the repository and distribute builds with the same public key that matches your issuer. During development, a PEM public key can also be supplied in `SERVEX_LICENSE_PUBLIC_KEY`.
+This writes the private PEM to the ignored `scripts/license-private.pem` and prints the public PEM. Keep a secure copy of the private file. To store it outside the checkout, pass a secure file path after `--init-keys` and set `SERVEX_LICENSE_PRIVATE_KEY_FILE` to that path when issuing licenses.
 
-Ask the customer for the machine ID shown in **Activate ServeX**, then generate their key:
+Set `PUBLIC_KEY_PEM` in `electron/license.ts` to the printed public PEM, including the header and footer, then run `npm run build:win`. Builds already using `build/license-public.pem` can keep that configuration. If you already have an issuer pair, reuse it so existing Ed25519 activations continue to work.
+
+Ask the customer for the device ID shown in **Activate ServeX**, then generate their key:
 
 ```sh
-node scripts/generate-license.js MACHINE_ID /secure/location/servex-private.pem
+node scripts/generate-license.js DEVICE_ID
 ```
 
-The displayed `SVX-…` key contains a full Ed25519 signature. Only the issuer can sign for another machine. Buyers can use the full trial without an issuer key, while paid activations require an issuer-configured build. If you previously issued a legacy activation token, issue a new machine-bound key for this version.
+The resulting `SVX-…` token contains a Base64url Ed25519 signature bound to that device. The verifier also accepts the earlier hex Ed25519 format. To rotate an issuer, run `--init-keys` with a new private file path, embed the matching public PEM, rebuild, and reissue activations for that release.
 
 ## Mobile Waiter Sync
 

@@ -13,7 +13,7 @@ import { CloudBackup, DeviceSecrets } from './cloud'
 import { MediaLibrary } from './media'
 import { FloorService, orderColumns } from './service'
 import { Printer, receiptHtml, ticketHtml, zReportHtml, rawTicket, rawReceipt, rawZReport, type ReceiptDocument } from './printer'
-import { LicenseManager } from './license'
+import { LicenseManager, PUBLIC_KEY_PEM } from './license'
 import { LocalServer } from './localServer'
 import { Reports, closedDay } from './reports'
 import type { Cashier, Category, FloorTable, MenuItem, Order, OrderItem, Settings, SettingsInput, Snapshot, Zone, ServexApi } from '../src/types/pos'
@@ -54,8 +54,9 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
   const printer = new Printer()
   const reports = new Reports(db)
   const keyFile = path.join(app.getAppPath(), 'build', 'license-public.pem')
-  const license = new LicenseManager(path.join(storage, 'license-trial.json'),
-    (!app.isPackaged && process.env.SERVEX_LICENSE_PUBLIC_KEY) || (fs.existsSync(keyFile) ? fs.readFileSync(keyFile, 'utf8') : undefined))
+  const packagedPublicKey = PUBLIC_KEY_PEM || (fs.existsSync(keyFile) ? fs.readFileSync(keyFile, 'utf8') : '')
+  const publicKey = (!app.isPackaged && process.env.SERVEX_LICENSE_PUBLIC_KEY) || packagedPublicKey
+  const license = new LicenseManager(path.join(storage, 'license-trial.json'), publicKey)
   const licenseState = () => license.state(db.all<{ license_key: string | null }>('SELECT license_key FROM settings WHERE id=1')[0].license_key)
   const needsSetup = () => db.all<{ onboarding_completed: number }>('SELECT onboarding_completed FROM settings WHERE id=1')[0].onboarding_completed === 0
   const lan = new LocalServer(db, service, () => !needsSetup() && licenseState().mode !== 'expired',

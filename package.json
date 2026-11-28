@@ -43,7 +43,7 @@
   "build": {
     "appId": "com.servex.pos",
     "directories": {"output": "release"},
-    "files": ["dist/**", "dist-electron/**", "package.json", "build/license-public.pem"],
+    "files": ["dist/**", "dist-electron/**", "package.json", "build/license-public.pem", "!scripts/**"],
     "extraResources": [{"from": "build/icon.ico", "to": "icon.ico"}],
     "asarUnpack": ["node_modules/sql.js/dist/*.wasm"],
     "win": {"icon": "build/icon.ico", "target": ["nsis", "portable"]},
