@@ -28,7 +28,8 @@ jobs:
           node-version: 20
       - name: Sign the customer's Device ID
         env:
-          SERVEX_PRIVATE_KEY: ${{ secrets.SERVEX_PRIVATE_KEY }}
+          SERVEX_PRIVATE_KEY: |
+            ${{ secrets.SERVEX_PRIVATE_KEY }}
           DEVICE_ID: ${{ inputs.device_id }}
           CUSTOMER_NAME: ${{ inputs.customer_name }}
         run: node scripts/generate-license.js "$DEVICE_ID" "$CUSTOMER_NAME"

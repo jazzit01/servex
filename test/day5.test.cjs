@@ -136,6 +136,14 @@ test('mobile license issuer reads the secret and writes a safe run summary', t =
     SERVEX_PRIVATE_KEY: privatePem, GITHUB_STEP_SUMMARY: summaryFile,
   })
   assert.equal(validActivation(token, device, publicPem), true)
+  const wrapped = privatePem.replace(/\n/g, '\r\n')
+  for (const secret of [wrapped, privatePem.replace(/\n/g, '\\n'),
+    Buffer.from(privatePem).toString('base64'), '  ' + privatePem.replace(/\n/g, ' ') + '  ',
+    privatePem.replace(/\n([^\n]+)\n/, (_, body) => '\n' + body.match(/.{1,19}/g).join(' \n ') + '\n')]) {
+    assert.equal(issue([device], { SERVEX_PRIVATE_KEY: secret }), token)
+  }
+  assert.throws(() => issue([device], { GITHUB_ACTIONS: 'true', SERVEX_PRIVATE_KEY: '\n' }), /SERVEX_PRIVATE_KEY is empty/)
+  assert.throws(() => issue([device], { SERVEX_PRIVATE_KEY: 'corrupt' }), /PKCS#8/)
   const summary = fs.readFileSync(summaryFile, 'utf8')
   assert.match(summary, /Customer Name\*\* Cafe &#91;buyer&#93;/)
   assert.ok(summary.includes('```text\n' + token + '\n```'))

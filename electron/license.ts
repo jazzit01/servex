@@ -21,7 +21,7 @@ export function machineFingerprint() {
 }
 
 // Provision this value with the issuer's SPKI public PEM before shipping a paid release.
-export const PUBLIC_KEY_PEM = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAKcL8k4AJ3WHAEeuzWjFQgdiKVraZ8zFvfYnzs94DM4g=\n-----END PUBLIC KEY-----\n"
+export const PUBLIC_KEY_PEM = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAFYuEVds3FsTsKtgbT0IoRWMpnQF7w3g3vkA+aOHZFFY=\n-----END PUBLIC KEY-----\n"
 
 export function validActivation(value: string, machine: string, publicKey: string = PUBLIC_KEY_PEM) {
   if (!publicKey.startsWith('-----BEGIN PUBLIC KEY-----') || typeof value !== 'string' || value.length > 256) return false

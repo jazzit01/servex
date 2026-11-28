@@ -82,3 +82,5 @@ const api: ServexApi = {
   syncCloud: channel('syncCloud'),
 }
 contextBridge.exposeInMainWorld('servexApi', api)
+
+contextBridge.exposeInMainWorld('api', { copyText: (text: string): Promise<void> => ipcRenderer.invoke('clipboard:writeText', text) })

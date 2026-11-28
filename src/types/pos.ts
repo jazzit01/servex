@@ -134,7 +134,7 @@ export interface ServexApi {
   updateCloud(input: CloudInput): Promise<void>
   syncCloud(): Promise<void>
 }
-declare global { interface Window { servexApi: ServexApi } }
+declare global { interface Window { servexApi: ServexApi; api?: { copyText(text: string): Promise<void> } } }
 
 export interface StaffUser extends Cashier { is_active: number }
 export interface StaffInput { id?: number; name: string; role: Role; pin?: string; active: boolean }

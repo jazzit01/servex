@@ -82,7 +82,7 @@ function PosApp() {
   const expired = startup.license.mode === 'expired'
   const Page = route === 'settings' ? null : pages[route]
   return <>
-    {!expired && (cashier ? <AppShell license={startup.license} activate={() => setActivation(true)}>{Page ? <Page key={route === 'billing' ? billingSession : route} /> : <SettingsPage openLicense={() => setActivation(true)} />}</AppShell>
+    {!expired && (cashier ? <AppShell license={startup.license} activate={() => setActivation(true)}>{Page ? <Page key={route === 'billing' ? billingSession : route} /> : <SettingsPage license={startup.license} openLicense={() => setActivation(true)} />}</AppShell>
       : <><PinLogin openSetup={openSetup} disabled={startup.onboarding} /><button className="secondary fixed right-5 top-5" onClick={() => setActivation(true)}>
         {startup.license.mode === 'trial' ? `7-Day Full Trial · ${startup.license.daysLeft} days left` : 'License Active'}</button></>)}
     {expired && <div className="grid h-screen place-items-center bg-slate-50"><div className="panel space-y-4 p-8">

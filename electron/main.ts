@@ -1,7 +1,7 @@
 import { Enterprise, redeemAmount } from './enterprise'
 import type { DisplayCart, DisplayState, EnterpriseData, PrinterSetting } from '../src/types/enterprise'
 import { withDialogFocus } from './dialogFocus'
-import { app, Menu, screen, BrowserWindow, dialog, ipcMain, IpcMainInvokeEvent } from 'electron'
+import { app, Menu, screen, BrowserWindow, clipboard, dialog, ipcMain, IpcMainInvokeEvent } from 'electron'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -71,14 +71,24 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
   function ensureIdle(...ids: number[]) {
     if (ids.some(id => printing.has(id))) throw new Error('Wait for the order’s print dialog to finish.')
   }
+  function requireMainRenderer(event: IpcMainInvokeEvent) {
+    if (!window || event.sender !== window.webContents || event.senderFrame !== event.sender.mainFrame ||
+        event.senderFrame.url !== homePage) throw new Error('Invalid request origin.')
+  }
+
+  ipcMain.handle('clipboard:writeText', (event, text: unknown) => {
+    requireMainRenderer(event)
+    if (typeof text !== 'string' || text.length > 65536) throw new Error('Invalid clipboard text.')
+    clipboard.writeText(text)
+  })
+
   function register<K extends keyof ServexApi>(
     name: K, access: 'public' | 'staff' | 'manager' | 'admin',
     handle: (...args: Parameters<ServexApi[K]>) => ReturnType<ServexApi[K]> | Awaited<ReturnType<ServexApi[K]>>,
     namespace: 'pos' | 'tables' = 'pos',
   ) {
     ipcMain.handle(`${namespace}:${name}`, (event: IpcMainInvokeEvent, ...args: Parameters<ServexApi[K]>) => {
-      if (!window || event.sender !== window.webContents || event.senderFrame !== event.sender.mainFrame ||
-          event.senderFrame.url !== homePage) throw new Error('Invalid request origin.')
+      requireMainRenderer(event)
       if (access !== 'public' && !cashier) throw new Error('Sign in to continue.')
       if (access === 'manager' && cashier?.role === 'cashier') throw new Error('Manager access is required.')
       if (access === 'admin' && cashier?.role !== 'admin') throw new Error('Administrator access is required.')
@@ -342,7 +352,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
     setupGrant = null
   })
   register('activateLicense', 'public', key => {
-    if (!license.accepts(key)) throw new Error('Activation key is invalid for this machine or the issuer key is missing.')
+    if (!license.accepts(key)) throw new Error('Activation Key is invalid for this Device ID or the issuer key is missing.')
     db.transaction(sql => {
       sql.run('UPDATE settings SET license_key=? WHERE id=1', [key.trim()])
       sql.run("INSERT INTO audit_logs (user_id,action,entity_type) VALUES (?,'LICENSE_ACTIVATED','settings')", [cashier?.id ?? null])
@@ -407,7 +417,7 @@ function handlers(db: PosDatabase, media: MediaLibrary, backup: BackupEngine, cl
       throw new Error('Administrator access is required for security and license settings.')
     }
     const digest = input.managerPin === undefined ? null : pinDigest(db, validPin(input.managerPin))
-    if (input.licenseKey !== undefined && !license.accepts(input.licenseKey)) throw new Error('Activation key is invalid for this machine.')
+    if (input.licenseKey !== undefined && !license.accepts(input.licenseKey)) throw new Error('Activation Key is invalid for this Device ID.')
     if (input.upi_id !== undefined && (typeof input.upi_id !== 'string' || !/^[\w.+-]{1,120}@[\w.-]{1,64}$/.test(input.upi_id))) throw new Error('Enter a valid UPI ID.')
     if (input.receipt_width !== undefined && ![58, 80].includes(input.receipt_width)) throw new Error('Choose a 58 mm or 80 mm roll.')
     if (input.print_preview !== undefined && ![0, 1].includes(input.print_preview)) throw new Error('Choose a valid print mode.')

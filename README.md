@@ -45,7 +45,7 @@ A new device gets seven days of full trial access. Offline activation requires a
 node scripts/generate-license.js --init-keys
 ```
 
-Run this locally in a private terminal. It prints the private and public PEMs. Save the full private PEM, including its header and footer, as the GitHub Actions repository secret `SERVEX_PRIVATE_KEY`. For local issuing, put the same PEM in the `SERVEX_PRIVATE_KEY` environment variable or in the ignored root `.env` as a quoted multiline value. You can also pass a secure file path after `--init-keys` to save the private PEM there and print only the public PEM. Set `SERVEX_LICENSE_PRIVATE_KEY_FILE` to that path when issuing locally.
+Run this locally in a private terminal. It prints the private and public PEMs. Save the full private PEM as the GitHub Actions repository secret `SERVEX_PRIVATE_KEY`. The issuer accepts multiline PEM, PEM with literal `\n` separators, or a single Base64 line encoding the complete PEM. For local issuing, put the same PEM in the `SERVEX_PRIVATE_KEY` environment variable or in the ignored root `.env` as a quoted multiline value. You can also pass a secure file path after `--init-keys` to save the private PEM there and print only the public PEM. Set `SERVEX_LICENSE_PRIVATE_KEY_FILE` to that path when issuing locally.
 
 Set `PUBLIC_KEY_PEM` in `electron/license.ts` to the printed public PEM, including the header and footer, then run `npm run build:win`. Builds already using `build/license-public.pem` can keep that configuration. If you already have an issuer pair, reuse it so existing Ed25519 activations continue to work.
 

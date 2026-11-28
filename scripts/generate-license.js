@@ -14,11 +14,35 @@ const deviceFormat = /^[A-F0-9]{24}$/i
 function issuerKey() {
   const fromEnvironment = process.env.SERVEX_PRIVATE_KEY?.trim()
   if (fromEnvironment) return fromEnvironment
+  if (process.env.GITHUB_ACTIONS === 'true') throw new Error('SERVEX_PRIVATE_KEY is empty. Add the issuer private key in GitHub Actions secrets.')
   const localKey = fs.existsSync(envFile) ? parseEnv(fs.readFileSync(envFile, 'utf8')).SERVEX_PRIVATE_KEY?.trim() : ''
   if (localKey) return localKey
   const privateFile = process.env.SERVEX_LICENSE_PRIVATE_KEY_FILE || defaultPrivateFile
   if (fs.existsSync(privateFile)) return fs.readFileSync(privateFile, 'utf8')
   throw new Error('Set SERVEX_PRIVATE_KEY in your environment or local .env. To create an issuer pair, run ' + initCommand)
+}
+
+function decodeBase64(value) {
+  const compact = value.replace(/\s/g, '')
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) throw new Error('Invalid Base64.')
+  const decoded = Buffer.from(compact, 'base64')
+  if (decoded.toString('base64').replace(/=+$/, '') !== compact.replace(/=+$/, '')) throw new Error('Invalid Base64.')
+  return decoded
+}
+
+function parseIssuerKey(secret) {
+  let key
+  try {
+    let pem = secret.trim().replace(/\\r\\n|\\n|\\r/g, '\n')
+    if (!pem.startsWith('-----BEGIN')) pem = decodeBase64(pem).toString('utf8').trim().replace(/\\r\\n|\\n|\\r/g, '\n')
+    const body = pem.match(/^-----BEGIN PRIVATE KEY-----([\s\S]+?)-----END PRIVATE KEY-----$/)?.[1]
+    if (!body) throw new Error('Invalid PEM envelope.')
+    key = createPrivateKey({ key: decodeBase64(body), format: 'der', type: 'pkcs8' })
+  } catch {
+    throw new Error('SERVEX_PRIVATE_KEY must contain a PKCS#8 private PEM or its Base64 encoding.')
+  }
+  if (key.asymmetricKeyType !== 'ed25519') throw new Error('Choose an Ed25519 private key.')
+  return key
 }
 
 function initialize(privateFile, publicFile) {
@@ -64,11 +88,7 @@ try {
     const deviceId = command.trim().toUpperCase()
     const customerName = argument?.replace(/[\s\p{Cc}\p{Cf}]+/gu, ' ').trim() || 'Valued Customer'
     if (customerName.length > 120) throw new Error('Use a customer name up to 120 characters.')
-    let key
-    const pem = issuerKey()
-    try { key = createPrivateKey(pem.replace(/\\n/g, '\n')) }
-    catch { throw new Error('SERVEX_PRIVATE_KEY must contain a valid PEM private key.') }
-    if (key.asymmetricKeyType !== 'ed25519') throw new Error('Choose an Ed25519 private key.')
+    const key = parseIssuerKey(issuerKey())
     const signature = sign(null, Buffer.from(deviceId), key)
     outputLicense(deviceId, customerName, 'SVX-' + signature.toString('base64url'))
   } else {

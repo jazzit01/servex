@@ -1,3 +1,5 @@
+import DeviceId from '../components/licensing/DeviceId'
+import type { LicenseState } from '../types/pos'
 import EnterpriseSettings from '../components/enterprise/EnterpriseSettings'
 import { useState } from 'react'
 import { ArrowLeft, Building2, CloudUpload, Eye, EyeOff, ImagePlus, KeyRound, Layers, ShieldCheck, Trash2, Users } from 'lucide-react'
@@ -115,19 +117,29 @@ const tabs = [
   { id: 'mobile', label: 'Mobile Waiter Sync', icon: Layers },
 ] as const
 
-export default function SettingsPage({ openLicense }: { openLicense: () => void }) {
+export default function SettingsPage({ license, openLicense }: { license: LicenseState; openLicense: () => void }) {
   const cashier = usePosStore(state => state.cashier)
-  const [tab, setTab] = useState<typeof tabs[number]['id']>('profile')
+  const [tab, setTab] = useState<typeof tabs[number]['id'] | 'license'>('profile')
   const allowed = cashier?.role === 'admin' ? tabs : tabs.slice(0, 1)
   return <div className="mx-auto max-w-5xl space-y-5">
     <div><h1>Settings</h1><p className="subtitle">Customize the restaurant, manage staff and locations, and protect your local data.</p></div>
     <nav aria-label="Settings sections" className="flex flex-wrap gap-2 border-b pb-3">
       {allowed.map(({ id, label, icon: Icon }) => <button className={`secondary ${tab === id ? 'border-teal-300 bg-teal-50 text-teal-800' : ''}`}
         key={id} aria-pressed={tab === id} onClick={() => setTab(id)}><Icon size={16} />{label}</button>)}
-      <button className="secondary" onClick={openLicense}><KeyRound size={16}/> License</button>
+      <button className={`secondary ${tab === 'license' ? 'border-teal-300 bg-teal-50 text-teal-800' : ''}`}
+        aria-pressed={tab === 'license'} onClick={() => setTab('license')}><KeyRound size={16}/> License</button>
     </nav>
     {tab !== 'profile' && <button className="secondary h-10" onClick={() => setTab('profile')}><ArrowLeft size={16} /> Back to Restaurant Settings</button>}
-    {tab === 'profile' || cashier?.role !== 'admin' ? <ProfileSettings /> :
+    {tab === 'license' ? <section className="panel max-w-md space-y-4 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2>License Status</h2>
+        <span role="status" className={`rounded-full px-2 py-1 text-xs font-semibold ${license.mode === 'active' ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>
+          {license.mode === 'active' ? 'Active Commercial License' : license.mode === 'expired' ? 'Trial expired' : `Trial · ${license.daysLeft} days left`}
+        </span>
+      </div>
+      <DeviceId value={license.machine}/>
+      <button className="primary" onClick={openLicense}><KeyRound size={16}/> Activate / Manage License</button>
+    </section> : tab === 'profile' || cashier?.role !== 'admin' ? <ProfileSettings /> :
       tab === 'staff' ? <StaffSettings /> : tab === 'floor' ? <FloorSettings /> : tab === 'enterprise' ? <EnterpriseSettings /> : tab === 'mobile' ? <MobileWaiterSettings /> : <BackupSettings />}
   </div>
 }
