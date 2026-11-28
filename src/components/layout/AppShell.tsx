@@ -1,3 +1,4 @@
+import { Modal } from '../ManagementControls'
 import SmartCalculatorModal, { type CalculatorEntry } from '../ui/SmartCalculatorModal'
 import QuickBackup from '../enterprise/QuickBackup'
 import CommandPalette from '../ui/CommandPalette'
@@ -6,6 +7,16 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { AlertTriangle, Boxes, Calculator, Monitor, Moon, Search, Sun, Users, Volume2, VolumeX, BarChart3, ChefHat, ChevronsLeft, ChevronsRight, LayoutGrid, Lock, Plus, Receipt, Settings, UserRound, UtensilsCrossed } from 'lucide-react'
 import { usePosStore } from '../../store/usePosStore'
 import type { LicenseState, Route } from '../../types/pos'
+
+const counterShortcuts = [
+  ['Alt+0–9', 'Switch floor zones (0 for All Zones)'],
+  ['F1', 'New takeaway'],
+  ['F2', 'Send KOT in billing'],
+  ['F4', 'Checkout in billing'],
+  ['F9', 'Smart Calculator'],
+  ['Ctrl+K', 'Command Palette'],
+  ['Esc', 'Cancel or close'],
+]
 
 const links = [
   { route: 'floor', label: 'Floors & Rooms', icon: LayoutGrid },
@@ -34,6 +45,7 @@ export default function AppShell({ children, license, activate }: { children: Re
   const [collapsed, setCollapsed] = useState(false)
   const [palette,setPalette]=useState(false)
   const [backup,setBackup]=useState(false)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [calculator, setCalculator] = useState(false)
   const [tape, setTape] = useState<CalculatorEntry[]>([])
   const dark=data?.settings.theme_mode==='dark'
@@ -46,6 +58,13 @@ export default function AppShell({ children, license, activate }: { children: Re
           event.preventDefault()
           setCalculator(open => !open)
         }
+        return
+      }
+      if (event.key === '?' && !event.repeat && !event.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey &&
+          !document.querySelector('dialog[open]') && !(event.target instanceof HTMLElement &&
+            (event.target.isContentEditable || event.target.matches('input, textarea, select')))) {
+        event.preventDefault()
+        setShortcutsOpen(true)
         return
       }
       if(!((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k')||event.repeat||document.querySelector('dialog[open]'))return
@@ -91,6 +110,7 @@ export default function AppShell({ children, license, activate }: { children: Re
           <span className="hidden whitespace-nowrap border-l pl-4 text-xs text-slate-500 2xl:inline">{now.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} · {now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
         </div>
         <div className="flex items-center gap-2">
+          <button className="secondary h-9 whitespace-nowrap px-2.5" aria-keyshortcuts="?" onClick={() => setShortcutsOpen(true)}>Shortcuts <kbd className="caption">?</kbd></button>
           <button className="secondary h-9 px-2.5" title="Smart Calculator (F9)" aria-label="Open Smart Calculator" aria-keyshortcuts="F9"
             onClick={() => setCalculator(true)} disabled={calculator}><Calculator size={17}/></button>
           <button className="secondary h-9 whitespace-nowrap" onClick={()=>setPalette(true)}><Search size={16}/>Commands <kbd className="caption">Ctrl+K</kbd></button>
@@ -98,8 +118,9 @@ export default function AppShell({ children, license, activate }: { children: Re
           <button className="secondary h-9 px-2.5" aria-label={dark?'Switch to light mode':'Switch to dark mode'} onClick={()=>void enterpriseAction({type:'preferences',theme:dark?'light':'dark'})}>{dark?<Sun size={16}/>:<Moon size={16}/>}</button>
           <button className="secondary h-9 px-2.5" aria-label={data?.settings.sound_enabled?'Mute sounds':'Unmute sounds'} onClick={()=>void enterpriseAction({type:'preferences',sound:!data?.settings.sound_enabled})}>
             {data?.settings.sound_enabled?<Volume2 size={16}/>:<VolumeX size={16}/>}</button>
-          {license.mode === 'trial' && <button className="rounded-lg bg-teal-50 px-2.5 py-2 text-xs font-semibold text-teal-800"
-            onClick={activate}>7-Day Full Trial · {license.daysLeft} days left</button>}
+          <button className="whitespace-nowrap rounded-lg bg-teal-50 px-2.5 py-2 text-xs font-semibold text-teal-800" onClick={activate}>
+            {license.mode === 'trial' ? `7-Day Full Trial · ${license.daysLeft} days left` : 'License Active'}
+          </button>
           <span className="flex items-center gap-2 rounded-lg border bg-slate-50 px-3 py-2 text-xs font-semibold"><UserRound size={15} /> {cashier?.name} <span className="capitalize text-slate-500">{cashier?.role}</span></span>
           {route !== 'floor' && <button className="primary hidden h-9 2xl:inline-flex" onClick={() => startOrder('parcel')}><Plus size={17} /> New Takeaway <kbd className="rounded bg-white/20 px-1.5 py-0.5 text-[11px]">F1</kbd></button>}
         </div>
@@ -110,6 +131,11 @@ export default function AppShell({ children, license, activate }: { children: Re
       </div>}
       <main className="min-h-0 flex-1 overflow-auto bg-slate-50 px-6 py-6">{children}</main>
     </div>
+    {shortcutsOpen && <Modal compact title="Counter shortcuts" onClose={() => setShortcutsOpen(false)} dismissLabel="Close">
+      <dl className="divide-y">{counterShortcuts.map(([key, action]) => <div key={key} className="grid grid-cols-[5.5rem_1fr] items-center gap-3 py-2 text-sm">
+        <dt><kbd className="rounded border bg-slate-50 px-1.5 py-0.5 text-xs">{key}</kbd></dt><dd>{action}</dd>
+      </div>)}</dl>
+    </Modal>}
     {backup&&<QuickBackup close={()=>setBackup(false)}/>}
     {palette&&<CommandPalette close={()=>setPalette(false)} backup={()=>setBackup(true)} calculator={() => setCalculator(true)}/>}
     {calculator && <SmartCalculatorModal close={() => setCalculator(false)} tape={tape} besideCart={route === 'billing'}

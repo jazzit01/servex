@@ -76,6 +76,26 @@ export default function FloorMapPage() {
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
   }, [editing, busy])
+  const savedZones = data?.zones
+  useEffect(() => {
+    function selectByKey(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.repeat || event.isComposing || event.ctrlKey || event.metaKey ||
+          event.shiftKey || document.querySelector('dialog[open]')) return
+      const focused = document.activeElement
+      if (!event.altKey && focused instanceof HTMLElement &&
+          (focused.isContentEditable || focused.matches('input, textarea, select'))) return
+      const digit = /^[0-9]$/.test(event.key) ? event.key :
+        event.altKey ? event.code.match(/^Digit([0-9])$/)?.[1] : undefined
+      if (digit === undefined) return
+      const index = Number(digit)
+      const zone = [...(savedZones ?? []), ...newZones][index - 1]
+      if (index !== 0 && !zone) return
+      event.preventDefault()
+      selectZone(index === 0 ? null : zone.id)
+    }
+    window.addEventListener('keydown', selectByKey)
+    return () => window.removeEventListener('keydown', selectByKey)
+  }, [savedZones, newZones])
   if (!data) return null
   const allZones = [...data.zones, ...newZones.map((zone, index) => ({ ...zone, sort_order: data.zones.length + index }))]
   const zones = zoneId === null ? allZones : allZones.filter(zone => zone.id === zoneId)
@@ -133,9 +153,11 @@ export default function FloorMapPage() {
             {[{ id: null, name: 'All Zones' }, ...allZones].map((zone, index) => {
               const count = zone.id === null ? activeLocations.length : activeLocations.filter(table => table.zone_id === zone.id).length
               const appearance = 'color' in zone ? zoneAppearance(zone.name, zone.color, allZones.slice(0, index - 1)) : null
-              return <button type="button" key={zone.id ?? 'all'} aria-pressed={zone.id === zoneId}
+              return <button type="button" key={zone.id ?? 'all'} aria-pressed={zone.id === zoneId} aria-keyshortcuts={index <= 9 ? `Alt+${index} ${index}` : undefined}
                 className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-semibold ${zone.id === zoneId ? (appearance?.badge ?? 'bg-teal-50 text-teal-800') : 'text-slate-600 hover:bg-slate-100'}`}
-                onClick={() => selectZone(zone.id)}>{appearance && <appearance.Icon size={14} className="shrink-0"/>}{zone.name}<span className="rounded-full bg-slate-100 px-1.5 text-xs" aria-label={`${count} active`}>{count}</span></button>
+                onClick={() => selectZone(zone.id)}>{appearance && <appearance.Icon size={14} className="shrink-0"/>}{zone.name}<span className="rounded-full bg-slate-100 px-1.5 text-xs" aria-label={`${count} active`}>{count}</span>
+                {index <= 9 && <kbd aria-hidden className="rounded border px-1 text-[10px] font-normal text-slate-500">Alt+{index}</kbd>}
+              </button>
             })}
           </nav>
           {editable && <div className="flex shrink-0 items-center gap-1.5 border-l pl-3 text-xs font-semibold text-slate-600">

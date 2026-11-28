@@ -17,7 +17,7 @@ import ReportsPage from './pages/ReportsPage'
 import SettingsPage from './pages/SettingsPage'
 import { usePosStore } from './store/usePosStore'
 
-const pages = { floor: FloorMapPage, billing: BillingPage, orders: OrdersKotPage, menu: MenuAdminPage, reports: ReportsPage, settings: SettingsPage, crm:CrmPage, inventory:InventoryPage }
+const pages = { floor: FloorMapPage, billing: BillingPage, orders: OrdersKotPage, menu: MenuAdminPage, reports: ReportsPage, crm:CrmPage, inventory:InventoryPage }
 
 export default function App(){
   return location.hash === '#/customer-display' ? <CustomerDisplayPage/> : <PosApp/>
@@ -80,10 +80,11 @@ function PosApp() {
   if (!startup) return <div className="grid h-screen place-items-center text-sm text-slate-600">{startupError || 'Opening ServeX…'}</div>
   if (profile || (startup.onboarding && !deferredSetup)) return <SetupWizard profile={profile} cancel={cancelSetup} complete={completeSetup} />
   const expired = startup.license.mode === 'expired'
-  const Page = pages[route]
+  const Page = route === 'settings' ? null : pages[route]
   return <>
-    {!expired && (cashier ? <AppShell license={startup.license} activate={() => setActivation(true)}><Page key={route === 'billing' ? billingSession : route} /></AppShell>
-      : <><PinLogin openSetup={openSetup} disabled={startup.onboarding} />{startup.license.mode === 'trial' && <button className="secondary fixed right-5 top-5" onClick={() => setActivation(true)}>7-Day Full Trial · {startup.license.daysLeft} days left</button>}</>)}
+    {!expired && (cashier ? <AppShell license={startup.license} activate={() => setActivation(true)}>{Page ? <Page key={route === 'billing' ? billingSession : route} /> : <SettingsPage openLicense={() => setActivation(true)} />}</AppShell>
+      : <><PinLogin openSetup={openSetup} disabled={startup.onboarding} /><button className="secondary fixed right-5 top-5" onClick={() => setActivation(true)}>
+        {startup.license.mode === 'trial' ? `7-Day Full Trial · ${startup.license.daysLeft} days left` : 'License Active'}</button></>)}
     {expired && <div className="grid h-screen place-items-center bg-slate-50"><div className="panel space-y-4 p-8">
       <h1>ServeX POS</h1><p className="subtitle">Activate ServeX to open the till.</p>
       <button className="primary" onClick={() => setActivation(true)}>Activate ServeX</button>
@@ -92,7 +93,9 @@ function PosApp() {
     {verifySetup && <SetupAccess close={() => setVerifySetup(false)} authorized={value => { setVerifySetup(false); setProfile(value) }} />}
     {!expired && cashier && <PrintPreview />}
     {!verifySetup && ((expired && !dismissedActivation) || activation) && <LicenseModal state={startup.license} close={() => { setActivation(false); setDismissedActivation(true) }} activated={license => {
-      setStartup({ ...startup, license }); setActivation(false)
+      setStartup({ ...startup, license })
+      setActivation(true)
+      if (cashier) void usePosStore.getState().refresh().catch(() => {})
     }} />}
     {toast && <div role={toast.error ? 'alert' : 'status'} className={`fixed bottom-6 right-6 rounded-lg px-4 py-3 text-sm font-medium text-white shadow-lg ${toast.error ? 'bg-red-700' : 'bg-teal-800'}`}>{toast.message}</div>}
   </>

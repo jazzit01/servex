@@ -1,6 +1,6 @@
 import EnterpriseSettings from '../components/enterprise/EnterpriseSettings'
 import { useState } from 'react'
-import { ArrowLeft, Building2, CloudUpload, Eye, EyeOff, ImagePlus, Layers, ShieldCheck, Trash2, Users } from 'lucide-react'
+import { ArrowLeft, Building2, CloudUpload, Eye, EyeOff, ImagePlus, KeyRound, Layers, ShieldCheck, Trash2, Users } from 'lucide-react'
 import { Field, Switch } from '../components/ManagementControls'
 import MobileWaiterSettings from '../components/settings/MobileWaiterSettings'
 import BackupSettings from '../components/settings/BackupSettings'
@@ -41,13 +41,11 @@ function ProfileSettings() {
       address: string('address') || null, gstin: string('gstin') || null, receipt_footer: string('receipt_footer') || null,
       currency_symbol: string('currency_symbol'), tax_rate: Number(form.get('tax_rate')), tax_inclusive: Number(inclusive), auto_cleaning: Number(autoCleaning),
       upi_id: string('upi_id'), receipt_width: Number(form.get('receipt_width')), print_preview: Number(printPreview), printer_name: string('printer_name'),
-      managerPin: string('managerPin') || undefined, licenseKey: string('licenseKey') || undefined,
+      managerPin: string('managerPin') || undefined,
     }), 'Settings saved.')
     if (saved) {
-      for (const field of ['managerPin', 'licenseKey']) {
-        const input = target.elements.namedItem(field) as HTMLInputElement | null
-        if (input) input.value = ''
-      }
+      const input = target.elements.namedItem('managerPin') as HTMLInputElement | null
+      if (input) input.value = ''
     }
   }}>
     <div className="grid grid-cols-2 items-start gap-6">
@@ -100,14 +98,6 @@ function ProfileSettings() {
           <button type="button" aria-label={showPin ? 'Hide manager PIN' : 'Show manager PIN'} onClick={() => setShowPin(!showPin)} className="absolute bottom-1.5 right-2 rounded p-1 text-slate-600">{showPin ? <EyeOff size={18} /> : <Eye size={18} />}</button>
           <p className="mt-2 text-xs text-slate-500">Authorizes a cashier to close the business day.</p>
         </div>}
-        <div className="space-y-2 border-t pt-4">
-          <div className="flex items-center justify-between gap-3"><span className="text-sm font-medium">License Key</span>
-            <span className={`rounded-full px-2 py-1 text-xs font-semibold ${settings.licenseActive ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
-              {settings.licenseActive ? 'Active Commercial License' : settings.licenseConfigured ? 'License verification required' : 'No license configured'}
-            </span></div>
-          {admin && <input className="field" name="licenseKey" aria-label="New commercial license key" type="password" autoComplete="off"
-            maxLength={2048} disabled={disabled} placeholder={settings.licenseConfigured ? 'Enter a key to replace the current key' : 'Enter commercial license key'} />}
-        </div>
       </section>
     </div>
     <div className="sticky bottom-0 z-10 flex justify-end rounded-xl border bg-white/95 p-3 shadow-sm">
@@ -125,7 +115,7 @@ const tabs = [
   { id: 'mobile', label: 'Mobile Waiter Sync', icon: Layers },
 ] as const
 
-export default function SettingsPage() {
+export default function SettingsPage({ openLicense }: { openLicense: () => void }) {
   const cashier = usePosStore(state => state.cashier)
   const [tab, setTab] = useState<typeof tabs[number]['id']>('profile')
   const allowed = cashier?.role === 'admin' ? tabs : tabs.slice(0, 1)
@@ -134,6 +124,7 @@ export default function SettingsPage() {
     <nav aria-label="Settings sections" className="flex flex-wrap gap-2 border-b pb-3">
       {allowed.map(({ id, label, icon: Icon }) => <button className={`secondary ${tab === id ? 'border-teal-300 bg-teal-50 text-teal-800' : ''}`}
         key={id} aria-pressed={tab === id} onClick={() => setTab(id)}><Icon size={16} />{label}</button>)}
+      <button className="secondary" onClick={openLicense}><KeyRound size={16}/> License</button>
     </nav>
     {tab !== 'profile' && <button className="secondary h-10" onClick={() => setTab('profile')}><ArrowLeft size={16} /> Back to Restaurant Settings</button>}
     {tab === 'profile' || cashier?.role !== 'admin' ? <ProfileSettings /> :
